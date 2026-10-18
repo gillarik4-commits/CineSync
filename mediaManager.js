@@ -53,9 +53,15 @@ router.post('/api/inspect', (req, res) => {
 });
 
 const handlePrepare = (req, res) => {
-  const { filePath, audioIndex, subIndex } = req.body;
+  const { filePath, audioIndex, subIndex, externalSubPath } = req.body;
   if (!filePath || !fs.existsSync(filePath)) {
     return res.status(400).json({ error: 'File not found' });
+  }
+
+  const cleanExternalSub = (typeof externalSubPath === 'string' && externalSubPath.trim()) ? externalSubPath.trim() : null;
+
+  if (cleanExternalSub && !fs.existsSync(cleanExternalSub)) {
+    return res.status(400).json({ error: 'External subtitle file not found' });
   }
 
   res.json({ success: true, message: 'Processing started' });
@@ -65,12 +71,43 @@ const handlePrepare = (req, res) => {
 
   const extractSubtitles = () => {
     return new Promise((resolve) => {
-      if (subIndex === 'none' || subIndex === undefined) return resolve();
-      ffmpeg(filePath)
-        .outputOptions([`-map 0:${subIndex}`, '-c:s webvtt'])
-        .save(SUBTITLE_PATH)
-        .on('end', () => resolve())
-        .on('error', () => resolve());
+      if (cleanExternalSub) {
+        const ext = path.extname(cleanExternalSub).toLowerCase();
+        if (ext === '.vtt') {
+          try {
+            fs.copyFileSync(cleanExternalSub, SUBTITLE_PATH);
+            resolve();
+          } catch (err) {
+            console.error('Error copying external vtt file:', err);
+            resolve();
+          }
+        } else if (ext === '.srt') {
+          ffmpeg(cleanExternalSub)
+            .outputOptions(['-y', '-c:s webvtt'])
+            .save(SUBTITLE_PATH)
+            .on('end', () => resolve())
+            .on('error', (err) => {
+              console.error('Error converting srt to vtt:', err.message);
+              resolve();
+            });
+        } else {
+          ffmpeg(cleanExternalSub)
+            .outputOptions(['-y', '-c:s webvtt'])
+            .save(SUBTITLE_PATH)
+            .on('end', () => resolve())
+            .on('error', (err) => {
+              console.error('Error converting external subtitle to vtt:', err.message);
+              resolve();
+            });
+        }
+      } else {
+        if (subIndex === 'none' || subIndex === undefined || subIndex === 'external') return resolve();
+        ffmpeg(filePath)
+          .outputOptions([`-map 0:${subIndex}`, '-c:s webvtt'])
+          .save(SUBTITLE_PATH)
+          .on('end', () => resolve())
+          .on('error', () => resolve());
+      }
     });
   };
 

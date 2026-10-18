@@ -4,154 +4,94 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CineSync - Host Setup</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600&family=Geist:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <style>
-    .setup-container {
-      max-width: 600px; margin: 4rem auto; padding: 2rem;
-      background: var(--surface-card); border-radius: 12px;
-      border: 1px solid var(--border-hl);
-      box-shadow: 0 20px 40px rgba(0,0,0,0.5);
-    }
-    .setup-header { text-align: center; margin-bottom: 2rem; }
-    
-    .drop-zone {
-      border: 2px dashed var(--border-hl); border-radius: 8px;
-      padding: 3rem; text-align: center; cursor: pointer; transition: 0.3s;
-      background: rgba(255,255,255,0.02); margin-bottom: 2rem;
-    }
-    .drop-zone:hover, .drop-zone.dragover { border-color: var(--primary); background: rgba(99,102,241,0.05); }
-    
-    .form-group { margin-bottom: 1.5rem; text-align: left; }
-    .form-group label { display: block; font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem; }
-    select, input[type="text"] {
-      width: 100%; padding: 0.8rem; border-radius: 8px; border: 1px solid var(--border-hl);
-      background: var(--bg-canvas); color: #fff; font-family: 'Inter', sans-serif;
-    }
-    
-    .primary-btn {
-      width: 100%; padding: 1rem; border-radius: 8px; border: none;
-      background: var(--primary); color: white; font-weight: 600; font-size: 1rem;
-      cursor: pointer; transition: 0.2s;
-    }
-    .primary-btn:hover:not(:disabled) { background: var(--primary-hover); }
-    .primary-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-    #progress-container { display: none; margin-top: 1.5rem; }
-    .progress-bar-bg { width: 100%; height: 8px; background: var(--bg-canvas); border-radius: 4px; overflow: hidden; }
-    .progress-bar-fill { height: 100%; width: 0%; background: var(--primary); transition: width 0.2s; }
-  </style>
 </head>
-<body>
-  <div class="setup-container">
+<body class="setup-page-body">
+  <div class="setup-card">
     <div class="setup-header">
-      <h1 class="brand">CineSync</h1>
-      <p style="color: var(--text-muted); margin-top: 0.5rem;">Configure your watch party</p>
+      <h1 class="setup-brand">CineSync</h1>
+      <p class="setup-sub">Host a real-time synchronized watch party</p>
     </div>
 
+    <!-- Stepper (1 Choose file -> 2 Pick tracks -> 3 Prepare) -->
+    <div class="stepper">
+      <div class="step-item active" id="stepIndicator1">
+        <span class="step-badge">1</span>
+        <span>Choose file</span>
+      </div>
+      <div class="step-item" id="stepIndicator2">
+        <span class="step-badge">2</span>
+        <span>Pick tracks</span>
+      </div>
+      <div class="step-item" id="stepIndicator3">
+        <span class="step-badge">3</span>
+        <span>Prepare</span>
+      </div>
+    </div>
+
+    <!-- Step 1: File Selection -->
     <div id="setup-step-1">
       <div class="form-group">
-        <label>Enter local video file path (absolute path):</label>
-        <input type="text" id="filepath-input" placeholder="/home/user/Downloads/movie.mkv">
+        <label for="filepath-input">Local Movie File Path</label>
+        <input type="text" id="filepath-input" class="mono-input" placeholder="/home/user/Movies/movie.mkv" autocomplete="off" spellcheck="false">
+        <div class="field-hint">Paste the full path, e.g. /home/user/movie.mkv. Tip: on Windows, Shift+right-click the file, then Copy as path.</div>
       </div>
-      <button id="inspect-btn" class="primary-btn">Inspect Media</button>
+
+      <!-- Recent Files list from localStorage -->
+      <div class="recent-files-container" id="recentFilesContainer" style="display: none;">
+        <div class="recent-files-title">Recent Files</div>
+        <div id="recentFilesList"></div>
+      </div>
+
+      <div class="error-banner" id="inspectError"></div>
+
+      <button id="inspect-btn" class="primary-btn" style="margin-top: 16px;">Inspect Media</button>
     </div>
 
+    <!-- Step 2: Track Selection -->
     <div id="setup-step-2" style="display: none;">
-      <div class="form-group">
-        <label>Audio Track</label>
-        <select id="audio-select"></select>
+      <div style="font-size: 12px; color: var(--text-dim); margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between;">
+        <span>Video Codec: <strong id="videoCodecBadge" style="color: var(--text); font-family: var(--font-mono);"></strong></span>
+        <button id="btnChangeFile" style="background: none; border: none; color: var(--accent); font-size: 12px; cursor: pointer; text-decoration: underline;">Change file</button>
       </div>
+
       <div class="form-group">
-        <label>Subtitle Track</label>
-        <select id="sub-select"></select>
+        <label for="audio-select">Audio Track</label>
+        <div class="custom-select-wrapper">
+          <select id="audio-select" class="custom-select"></select>
+        </div>
       </div>
-      <button id="start-btn" class="primary-btn">Start Watch Party & Transcode</button>
-      
+
+      <div class="form-group">
+        <label for="sub-select">Embedded Subtitle Track</label>
+        <div class="custom-select-wrapper">
+          <select id="sub-select" class="custom-select"></select>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="external-sub-input">External Subtitle File Path (Optional .srt / .vtt)</label>
+        <input type="text" id="external-sub-input" class="mono-input" placeholder="/home/user/Movies/subtitles.srt" autocomplete="off" spellcheck="false">
+        <div class="field-hint" id="externalSubHint">Providing an external subtitle file will override embedded tracks.</div>
+      </div>
+
+      <div class="error-banner" id="prepareError"></div>
+
+      <button id="start-btn" class="primary-btn" style="margin-top: 8px;">Start Watch Party</button>
+
+      <!-- Step 3: Progress Container -->
       <div id="progress-container">
-        <p style="text-align: center; font-size: 0.85rem; margin-bottom: 0.5rem;" id="progress-text">Preparing...</p>
-        <div class="progress-bar-bg"><div class="progress-bar-fill" id="progress-bar"></div></div>
+        <p id="progress-text">Preparing...</p>
+        <div class="progress-bar-bg indeterminate" id="progressBarBg">
+          <div class="progress-bar-fill" id="progress-bar"></div>
+        </div>
       </div>
     </div>
   </div>
 
-  <script>
-    const inspectBtn = document.getElementById('inspect-btn');
-    const startBtn = document.getElementById('start-btn');
-    const filepathInput = document.getElementById('filepath-input');
-    let mediaDurationMs = 0;
-    let ws;
-
-    inspectBtn.addEventListener('click', async () => {
-      const filePath = filepathInput.value.trim();
-      if (!filePath) return alert('Enter a file path');
-      
-      inspectBtn.textContent = 'Inspecting...';
-      inspectBtn.disabled = true;
-
-      try {
-        const res = await fetch('/api/inspect', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ filePath })
-        });
-        const data = await res.json();
-        if (data.error) throw new Error(data.error);
-
-        mediaDurationMs = data.durationMs || 1; // avoid division by zero
-        
-        const audioSelect = document.getElementById('audio-select');
-        const subSelect = document.getElementById('sub-select');
-        
-        audioSelect.innerHTML = data.audio.map(a => `<option value="${a.index}">${a.label}</option>`).join('');
-        subSelect.innerHTML = `<option value="none">None</option>` + data.subtitle.map(s => `<option value="${s.index}">${s.label}</option>`).join('');
-
-        document.getElementById('setup-step-1').style.display = 'none';
-        document.getElementById('setup-step-2').style.display = 'block';
-
-        initProgressWebSocket();
-      } catch (err) {
-        alert(err.message);
-      } finally {
-        inspectBtn.textContent = 'Inspect Media';
-        inspectBtn.disabled = false;
-      }
-    });
-
-    function initProgressWebSocket() {
-      const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
-      ws = new WebSocket(wsUrl);
-      ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        if (data.type === 'TRANSCODE_PROGRESS') {
-          const percent = Math.min(100, Math.max(0, Math.round(data.percent || 0)));
-          document.getElementById('progress-bar').style.width = percent + '%';
-          document.getElementById('progress-text').textContent = `Processing: ${percent}%`;
-        } else if (data.type === 'TRANSCODE_COMPLETE' || data.type === 'MEDIA_READY') {
-          window.location.href = '/watch.html';
-        }
-      };
-    }
-
-    startBtn.addEventListener('click', async () => {
-      startBtn.disabled = true;
-      document.getElementById('progress-container').style.display = 'block';
-      
-      try {
-        await fetch('/api/prepare', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            filePath: filepathInput.value.trim(),
-            audioIndex: document.getElementById('audio-select').value,
-            subIndex: document.getElementById('sub-select').value
-          })
-        });
-      } catch (err) {
-        alert(err.message);
-        startBtn.disabled = false;
-      }
-    });
-  </script>
+  <script src="/setup.js"></script>
 </body>
 </html>

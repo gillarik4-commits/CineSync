@@ -9,6 +9,18 @@ let roomState = {
 
 let activeUsers = 0;
 
+function getUserList() {
+  const users = [];
+  if (wss) {
+    wss.clients.forEach(c => {
+      if (c.readyState === WebSocket.OPEN && c.username) {
+        users.push(c.username);
+      }
+    });
+  }
+  return users;
+}
+
 function init(server) {
   wss = new WebSocket.Server({ server });
 
@@ -21,10 +33,12 @@ function init(server) {
           ws.username = data.username || 'Anonymous';
           activeUsers++;
           
+          const currentUsers = getUserList();
           wss.clients.forEach(c => {
             if (c.readyState === WebSocket.OPEN) {
               c.send(JSON.stringify({ type: 'SYSTEM_MESSAGE', text: `${ws.username} joined the party` }));
               c.send(JSON.stringify({ type: 'USER_COUNT', count: activeUsers }));
+              c.send(JSON.stringify({ type: 'USER_LIST', users: currentUsers }));
             }
           });
         }
@@ -71,10 +85,12 @@ function init(server) {
     ws.on('close', () => {
       if (ws.username) {
         activeUsers--;
+        const currentUsers = getUserList();
         wss.clients.forEach(c => {
           if (c.readyState === WebSocket.OPEN) {
             c.send(JSON.stringify({ type: 'SYSTEM_MESSAGE', text: `${ws.username} left the party` }));
             c.send(JSON.stringify({ type: 'USER_COUNT', count: activeUsers }));
+            c.send(JSON.stringify({ type: 'USER_LIST', users: currentUsers }));
           }
         });
       }
