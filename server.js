@@ -12,9 +12,10 @@ const server = http.createServer(app);
 const fs = require('fs');
 
 const PORT = process.env.PORT || 3000;
+const DIST_DIR = path.join(__dirname, 'dist');
 const appState = {
   shareUrl: null,
-  isPartyActive: fs.existsSync(path.join(__dirname, 'public', 'media', 'movie.mp4'))
+  isPartyActive: fs.existsSync(mediaManager.MOVIE_PATH)
 };
 mediaManager.setAppState(appState);
 
@@ -39,7 +40,8 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(DIST_DIR));
+app.use('/media', express.static(mediaManager.MEDIA_DIR));
 
 // Attach media routes
 app.use('/', mediaManager.router);
@@ -111,6 +113,10 @@ function shutdown() {
 }
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
+
+if (!fs.existsSync(path.join(DIST_DIR, 'setup.html'))) {
+  console.warn('\n⚠️  The frontend has not been built yet. Run `npm start` (or `npm run build`) instead of `node server.js`.\n');
+}
 
 server.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);

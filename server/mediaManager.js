@@ -5,7 +5,7 @@ const ffmpeg = require('fluent-ffmpeg');
 const { getWss } = require('./syncManager');
 
 const router = express.Router();
-const MEDIA_DIR = path.join(__dirname, '..', 'public', 'media');
+const MEDIA_DIR = path.join(__dirname, '..', 'media');
 const MOVIE_PATH = path.join(MEDIA_DIR, 'movie.mp4');
 const SUBTITLE_PATH = path.join(MEDIA_DIR, 'subtitles.vtt');
 
@@ -36,7 +36,8 @@ function handleInspect(filePath, res) {
   ffmpeg.ffprobe(filePath, (err, metadata) => {
     if (err) return res.status(500).json({ error: 'ffprobe failed', details: err.message });
     
-    const result = { videoCodec: 'Unknown', audio: [], subtitle: [] };
+    const duration = Number(metadata.format && metadata.format.duration);
+    const result = { videoCodec: 'Unknown', duration: Number.isFinite(duration) ? duration : null, audio: [], subtitle: [] };
     
     metadata.streams.forEach(stream => {
       const label = (stream.tags?.language || 'Unknown') + ` (${stream.codec_name})`;
@@ -208,4 +209,4 @@ router.get('/video', (req, res) => {
   }
 });
 
-module.exports = { router, setAppState };
+module.exports = { router, setAppState, MEDIA_DIR, MOVIE_PATH };

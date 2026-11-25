@@ -156,7 +156,7 @@ function buildTestApp(partyActive = false) {
     next();
   });
 
-  app.use(express.static(path.join(__dirname, '..', 'public')));
+  app.use(express.static(path.join(__dirname, '..', 'dist')));
   app.use('/', mediaManager.router);
 
   // POST /api/reset-party
