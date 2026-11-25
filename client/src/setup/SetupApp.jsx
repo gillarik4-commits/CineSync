@@ -19,6 +19,7 @@ import SpotlightCard from '../shared/components/reactbits/SpotlightCard';
 import Logo from '../shared/components/Logo';
 import FileBrowser from './FileBrowser';
 import PermissionList from '../shared/components/PermissionList';
+import Switch from '../shared/components/Switch';
 import { normalizePermissions } from '../shared/lib/permissions';
 import { api } from '../shared/lib/api';
 import { basename, dirname, formatDuration } from '../shared/lib/format';
@@ -46,6 +47,7 @@ export default function SetupApp() {
   const [audio, setAudio] = useState('none');
   const [subtitle, setSubtitle] = useState('none');
   const [externalSub, setExternalSub] = useState('');
+  const [playEverywhere, setPlayEverywhere] = useState(false);
   const [prepareError, setPrepareError] = useState(null);
   const [progress, setProgress] = useState(null);
   const [done, setDone] = useState(false);
@@ -105,6 +107,8 @@ export default function SetupApp() {
       setAudio(data.audio?.length ? String(data.audio[0].index) : 'none');
       setSubtitle('none');
       setExternalSub('');
+      // Convert by default only when it's needed and a GPU makes it fast.
+      setPlayEverywhere(Boolean(data.compat?.recommended && data.compat?.gpu));
       setPrepareError(null);
       setStep(1);
     } catch (err) {
@@ -128,7 +132,8 @@ export default function SetupApp() {
           audioIndex: audio,
           subIndex: external ? 'external' : subtitle,
           externalSubPath: external || undefined,
-          permissions: guestPerms
+          permissions: guestPerms,
+          playEverywhere: Boolean(media?.compat?.recommended && playEverywhere)
         }
       });
     } catch (err) {
@@ -219,6 +224,8 @@ export default function SetupApp() {
                       onBrowseSub={() => setBrowser('subtitle')}
                       guestPerms={guestPerms}
                       setGuestPerms={setGuestPerms}
+                      playEverywhere={playEverywhere}
+                      setPlayEverywhere={setPlayEverywhere}
                       onChangeFile={changeFile}
                       onStart={start}
                     />
@@ -379,7 +386,9 @@ function TracksStep({
   onChangeFile,
   onStart,
   guestPerms,
-  setGuestPerms
+  setGuestPerms,
+  playEverywhere,
+  setPlayEverywhere
 }) {
   const duration = formatDuration(media.duration);
   const usingExternal = externalSub.trim().length > 0;
@@ -409,10 +418,29 @@ function TracksStep({
         </button>
       </div>
 
-      {videoCompatibilityNote(media.videoCodec) && (
-        <div className="note">
-          <Info size={15} />
-          <span>{videoCompatibilityNote(media.videoCodec)}</span>
+      {media.compat?.recommended && (
+        <div className="field">
+          <ul className="perm-list">
+            <li className="perm-row">
+              <label className="perm-text" htmlFor="play-everywhere">
+                <span className="perm-label">
+                  Play everywhere <span className="optional">· {media.compat.gpu ? `uses your ${media.compat.gpu}` : 'no GPU found'}</span>
+                </span>
+                <span className="perm-desc">
+                  {media.compat.gpu
+                    ? `Converts the ${codecName(media.videoCodec)} video to H.264 so it plays in every browser and phone. The room still opens in seconds.`
+                    : `Converts the ${codecName(media.videoCodec)} video to H.264 so it plays everywhere. Without a GPU this is slow, so jumping ahead is limited for a while.`}
+                </span>
+              </label>
+              <Switch id="play-everywhere" checked={playEverywhere} onChange={setPlayEverywhere} label="Play everywhere" />
+            </li>
+          </ul>
+          {!playEverywhere && videoCompatibilityNote(media.videoCodec) && (
+            <div className="note">
+              <Info size={15} />
+              <span>{videoCompatibilityNote(media.videoCodec)}</span>
+            </div>
+          )}
         </div>
       )}
 

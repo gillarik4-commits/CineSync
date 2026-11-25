@@ -6,6 +6,7 @@ const { getWss } = require('./syncManager');
 const { titleFromPath, saveMovieInfo, loadMovieInfo } = require('./movieInfo');
 const { requireHost } = require('./host');
 const permissions = require('./permissions');
+const { detectHardwareEncoder } = require('./hwaccel');
 
 const router = express.Router();
 const MEDIA_DIR = path.join(__dirname, '..', 'media');
@@ -102,10 +103,12 @@ function handleInspect(filePath, res) {
     const result = { videoCodec: 'Unknown', duration: Number.isFinite(duration) ? duration : null, audio: [], subtitle: [] };
     
     const audioCodecs = {};
+    let height = null;
     metadata.streams.forEach(stream => {
       const label = (stream.tags?.language || 'Unknown') + ` (${stream.codec_name})`;
-      if (stream.codec_type === 'video') {
+      if (stream.codec_type === 'video' && result.videoCodec === 'Unknown') {
         result.videoCodec = stream.codec_name;
+        height = stream.height || null;
       } else if (stream.codec_type === 'audio') {
         result.audio.push({ index: stream.index, label });
         audioCodecs[stream.index] = { codec: stream.codec_name, channels: stream.channels };
@@ -114,8 +117,12 @@ function handleInspect(filePath, res) {
       }
     });
 
-    probeCache.set(filePath, { videoCodec: result.videoCodec, duration: result.duration, audioCodecs });
-    res.json(result);
+    probeCache.set(filePath, { videoCodec: result.videoCodec, duration: result.duration, audioCodecs, height });
+    // H.264 plays everywhere; anything else can be converted ("play everywhere").
+    detectHardwareEncoder().then((gpu) => {
+      result.compat = { recommended: result.videoCodec !== 'h264', gpu: gpu ? gpu.label : null };
+      res.json(result);
+    });
   });
 }
 
@@ -128,7 +135,7 @@ router.post('/api/inspect', requireHost, (req, res) => {
 });
 
 const handlePrepare = (req, res) => {
-  const { filePath, audioIndex, subIndex, externalSubPath, permissions: guestPermissions } = req.body;
+  const { filePath, audioIndex, subIndex, externalSubPath, permissions: guestPermissions, playEverywhere } = req.body;
   if (!filePath || !fs.existsSync(filePath)) {
     return res.status(400).json({ error: 'File not found' });
   }
@@ -203,11 +210,37 @@ const handlePrepare = (req, res) => {
       ? [`-map 0:${audioIndex}`, '-c:a copy']
       : [`-map 0:${audioIndex}`, '-c:a aac', '-aac_coder fast', '-b:a 192k', '-ac 2'];
 
-  // Video is copied untouched. HEVC gets the "hvc1" tag Apple devices need.
-  const videoOptions = ['-map 0:v:0', '-c:v copy'];
-  if (probe.videoCodec === 'hevc') videoOptions.push('-tag:v hvc1');
+  startStream(playEverywhere === true);
+
+  async function startStream(convert) {
+  const inputOptions = [];
+  let videoOptions;
+  if (!convert) {
+    // Video is copied untouched. HEVC gets the "hvc1" tag Apple devices need.
+    videoOptions = ['-map 0:v:0', '-c:v copy'];
+    if (probe.videoCodec === 'hevc') videoOptions.push('-tag:v hvc1');
+  } else {
+    // "Play everywhere": convert to H.264, on the GPU if there is one.
+    const tall = (probe.height || 1080) > 1100;
+    const keyframes = '-force_key_frames expr:gte(t,n_forced*6)'; // a clean cut every chunk
+    const gpu = await detectHardwareEncoder();
+    if (gpu && gpu.type === 'vaapi') {
+      inputOptions.push('-hwaccel vaapi', `-hwaccel_device ${gpu.device}`, '-hwaccel_output_format vaapi');
+      videoOptions = [
+        '-map 0:v:0',
+        '-vf scale_vaapi=format=nv12', // also turns 10-bit sources into 8-bit
+        '-c:v h264_vaapi',
+        tall ? '-b:v 14M' : '-b:v 5M',
+        tall ? '-maxrate 20M' : '-maxrate 8M',
+        keyframes
+      ];
+    } else {
+      videoOptions = ['-map 0:v:0', '-c:v libx264', '-preset veryfast', '-crf 21', '-pix_fmt yuv420p', keyframes];
+    }
+  }
 
   const cmd = ffmpeg(filePath)
+    .inputOptions(inputOptions)
     .outputOptions([
       ...videoOptions,
       ...audioOptions,
@@ -254,6 +287,7 @@ const handlePrepare = (req, res) => {
     const summary = String(err.message || 'Unknown error').split('\n')[0].trim();
     broadcast({ type: 'TRANSCODE_ERROR', message: summary });
   });
+  }
 };
 
 router.post('/api/prepare', requireHost, handlePrepare);

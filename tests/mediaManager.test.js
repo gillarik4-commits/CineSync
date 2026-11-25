@@ -36,6 +36,11 @@ jest.mock('../server/syncManager', () => ({
   getWss: () => ({ clients: mockClients }),
 }));
 
+const mockGpu = { value: { type: 'vaapi', device: '/dev/dri/renderD128', label: 'Intel GPU' } };
+jest.mock('../server/hwaccel', () => ({
+  detectHardwareEncoder: () => Promise.resolve(mockGpu.value),
+}));
+
 jest.mock('fluent-ffmpeg', () => {
   const factory = jest.fn();
   factory.ffprobe = jest.fn();
@@ -71,6 +76,7 @@ function setExists(paths) {
 /** Build a no-op ffmpeg instance that calls onEvent(event, cb) for each .on() call */
 function makeFfmpegInst(onEvent) {
   const inst = {
+    inputOptions: jest.fn().mockReturnThis(),
     outputOptions: jest.fn().mockReturnThis(),
     save: jest.fn().mockReturnThis(),
     on: jest.fn().mockImplementation(function (event, cb) {
@@ -507,6 +513,64 @@ describe('mediaManager', () => {
 
       const res = await request(app).get('/api/movie');
       expect(res.body).toMatchObject({ preparedSeconds: 12.5, complete: false });
+    });
+
+    test('inspect says whether converting is recommended and which GPU would do it', async () => {
+      setExists(['/valid/movie.mkv']);
+      probeWith([{ index: 0, codec_type: 'video', codec_name: 'hevc', height: 800 }]);
+      const { app } = buildApp();
+      const res = await request(app).post('/api/inspect').send({ filePath: '/valid/movie.mkv' });
+      expect(res.body.compat).toEqual({ recommended: true, gpu: 'Intel GPU' });
+
+      probeWith([{ index: 0, codec_type: 'video', codec_name: 'h264', height: 1080 }]);
+      mockGpu.value = null;
+      const res2 = await request(app).post('/api/inspect').send({ filePath: '/valid/movie.mkv' });
+      expect(res2.body.compat).toEqual({ recommended: false, gpu: null });
+      mockGpu.value = { type: 'vaapi', device: '/dev/dri/renderD128', label: 'Intel GPU' };
+    });
+
+    test('play everywhere converts to H.264 on the GPU', async () => {
+      setExists(['/valid/movie.mkv']);
+      probeWith([
+        { index: 0, codec_type: 'video', codec_name: 'hevc', height: 800 },
+        { index: 1, codec_type: 'audio', codec_name: 'eac3', channels: 6 }
+      ]);
+      const { app } = buildApp();
+      await request(app).post('/api/inspect').send({ filePath: '/valid/movie.mkv' });
+      const { main, options } = await prepare(app, { audioIndex: '1', playEverywhere: true });
+      expect(main.inputOptions.mock.calls[0][0]).toEqual(
+        expect.arrayContaining(['-hwaccel vaapi', '-hwaccel_device /dev/dri/renderD128', '-hwaccel_output_format vaapi'])
+      );
+      expect(options).toEqual(expect.arrayContaining(['-c:v h264_vaapi', '-vf scale_vaapi=format=nv12', '-b:v 5M']));
+      expect(options.some((o) => o.startsWith('-force_key_frames'))).toBe(true);
+      expect(options).not.toContain('-c:v copy');
+      expect(options).not.toContain('-tag:v hvc1');
+    });
+
+    test('4K sources get a higher bitrate', async () => {
+      setExists(['/valid/movie.mkv']);
+      probeWith([{ index: 0, codec_type: 'video', codec_name: 'hevc', height: 2160 }]);
+      const { app } = buildApp();
+      await request(app).post('/api/inspect').send({ filePath: '/valid/movie.mkv' });
+      const { options } = await prepare(app, { audioIndex: 'none', playEverywhere: true });
+      expect(options).toContain('-b:v 14M');
+    });
+
+    test('without a GPU, play everywhere falls back to the CPU encoder', async () => {
+      mockGpu.value = null;
+      setExists(['/valid/movie.mkv']);
+      const { app } = buildApp();
+      const { main, options } = await prepare(app, { audioIndex: '1', playEverywhere: true });
+      expect(main.inputOptions.mock.calls[0][0]).toEqual([]);
+      expect(options).toEqual(expect.arrayContaining(['-c:v libx264', '-preset veryfast']));
+      mockGpu.value = { type: 'vaapi', device: '/dev/dri/renderD128', label: 'Intel GPU' };
+    });
+
+    test('by default the video is still copied, untouched', async () => {
+      setExists(['/valid/movie.mkv']);
+      const { main, options } = await prepare(buildApp().app, { audioIndex: '1' });
+      expect(options).toContain('-c:v copy');
+      expect(main.inputOptions.mock.calls[0][0]).toEqual([]);
     });
 
     test('timemarkToSeconds', () => {
