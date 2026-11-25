@@ -21,7 +21,7 @@ import { formatTime } from '../shared/lib/format';
  * Seek bar. The fill is driven from requestAnimationFrame straight to the DOM
  * so playback looks smooth without re-rendering React 60 times a second.
  */
-function Scrubber({ videoRef, duration, buffered, onSeek, onScrubbingChange }) {
+function Scrubber({ videoRef, duration, buffered, onSeek, onScrubbingChange, disabled }) {
   const barRef = useRef(null);
   const fillRef = useRef(null);
   const [hover, setHover] = useState(null); // { pos, time }
@@ -47,7 +47,7 @@ function Scrubber({ videoRef, duration, buffered, onSeek, onScrubbingChange }) {
   };
 
   const onPointerDown = (e) => {
-    if (!duration) return;
+    if (!duration || disabled) return;
     scrubbing.current = true;
     onScrubbingChange?.(true);
     barRef.current.setPointerCapture(e.pointerId);
@@ -57,7 +57,7 @@ function Scrubber({ videoRef, duration, buffered, onSeek, onScrubbingChange }) {
   };
 
   const onPointerMove = (e) => {
-    if (!duration) return;
+    if (!duration || disabled) return;
     const pos = posFrom(e);
     setHover({ pos, time: pos * duration });
     if (scrubbing.current) fillRef.current.style.width = `${pos * 100}%`;
@@ -77,8 +77,10 @@ function Scrubber({ videoRef, duration, buffered, onSeek, onScrubbingChange }) {
   return (
     <div
       ref={barRef}
-      className="scrubber"
+      className={`scrubber${disabled ? ' is-locked' : ''}`}
       role="slider"
+      aria-disabled={disabled || undefined}
+      title={disabled ? 'Only the host can skip around' : undefined}
       aria-label="Seek"
       aria-valuemin={0}
       aria-valuemax={Math.round(duration)}
@@ -146,7 +148,9 @@ export default function Controls({
   chatUnread,
   chatMenu,
   onChangeMovie,
-  onScrubbingChange
+  onScrubbingChange,
+  canPlayback = true,
+  canSeek = true
 }) {
   const v = useVideoState(videoRef);
   const [showRemaining, setShowRemaining] = useState(false);
@@ -159,6 +163,7 @@ export default function Controls({
         buffered={v.buffered}
         onSeek={onSeek}
         onScrubbingChange={onScrubbingChange}
+        disabled={!canSeek}
       />
       <div className="controls-row">
         <div className="controls-group">
@@ -166,15 +171,16 @@ export default function Controls({
             type="button"
             className="ctrl ctrl-play"
             onClick={onTogglePlay}
+            disabled={!canPlayback}
             aria-label={v.paused ? 'Play' : 'Pause'}
-            title={v.paused ? 'Play (Space)' : 'Pause (Space)'}
+            title={!canPlayback ? 'Only the host can play or pause' : v.paused ? 'Play (Space)' : 'Pause (Space)'}
           >
             {v.paused ? <Play size={20} fill="currentColor" /> : <Pause size={20} fill="currentColor" />}
           </button>
-          <button type="button" className="ctrl" onClick={() => onSkip(-10)} aria-label="Back 10 seconds" title="Back 10s (←)">
+          <button type="button" className="ctrl" onClick={() => onSkip(-10)} disabled={!canSeek} aria-label="Back 10 seconds" title="Back 10s (←)">
             <RotateCcw size={18} />
           </button>
-          <button type="button" className="ctrl" onClick={() => onSkip(10)} aria-label="Forward 10 seconds" title="Forward 10s (→)">
+          <button type="button" className="ctrl" onClick={() => onSkip(10)} disabled={!canSeek} aria-label="Forward 10 seconds" title="Forward 10s (→)">
             <RotateCw size={18} />
           </button>
           <VolumeControl volume={v.volume} muted={v.muted} onToggleMute={onToggleMute} onVolume={onVolume} />
@@ -216,9 +222,11 @@ export default function Controls({
             </button>
             {chatMenu}
           </div>
-          <button type="button" className="ctrl" onClick={onChangeMovie} aria-label="Change movie" title="Change movie">
-            <Clapperboard size={18} />
-          </button>
+          {onChangeMovie && (
+            <button type="button" className="ctrl" onClick={onChangeMovie} aria-label="Change movie" title="Change movie">
+              <Clapperboard size={18} />
+            </button>
+          )}
           <button
             type="button"
             className="ctrl"

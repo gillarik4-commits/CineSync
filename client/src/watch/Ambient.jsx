@@ -54,7 +54,7 @@ function Chip({ message, paused, onExpire }) {
  * Fullscreen "ambient" chat: new messages appear as bubbles over the movie and
  * fade away. Enter opens a one-line reply bar.
  */
-export default function AmbientLayer({ messages, replyOpen, onCloseReply, onOpenReply, onSend, typing, onTyping }) {
+export default function AmbientLayer({ messages, replyOpen, onCloseReply, onOpenReply, onSend, typing, onTyping, canChat = true }) {
   const [chips, setChips] = useState([]);
   const lastId = useRef(messages[messages.length - 1]?.id ?? 0);
   const [text, setText] = useState('');
@@ -115,7 +115,7 @@ export default function AmbientLayer({ messages, replyOpen, onCloseReply, onOpen
       <TypingLine text={typing} className="typing-ambient" />
 
       <AnimatePresence mode="wait" initial={false}>
-        {replyOpen ? (
+        {replyOpen && canChat ? (
           <motion.form
             key="reply"
             className="ambient-reply"
@@ -157,7 +157,7 @@ export default function AmbientLayer({ messages, replyOpen, onCloseReply, onOpen
             <CornerDownLeft size={14} className={`ambient-enter${text ? ' is-ready' : ''}`} aria-hidden="true" />
           </motion.form>
         ) : (
-          !hintDone && (
+          !hintDone && canChat && (
             <motion.button
               key="hint"
               type="button"

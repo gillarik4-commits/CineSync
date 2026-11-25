@@ -10,19 +10,7 @@ const EXTENSIONS = {
   subtitle: new Set(['.srt', '.vtt', '.ass', '.ssa', '.sub'])
 };
 
-const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
-
-/**
- * Directory listing exposes the host's filesystem, so only allow it for
- * requests made directly on the host machine. Traffic arriving through the
- * Cloudflare tunnel also comes from localhost (cloudflared runs locally), so
- * we additionally reject anything carrying proxy headers.
- */
-function isHostRequest(req) {
-  if (!LOOPBACK.has(req.socket.remoteAddress)) return false;
-  if (req.headers['cf-connecting-ip'] || req.headers['cf-ray'] || req.headers['x-forwarded-for']) return false;
-  return true;
-}
+const { isHostRequest } = require('./host');
 
 function getPlaces() {
   const home = os.homedir();

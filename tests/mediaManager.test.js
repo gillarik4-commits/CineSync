@@ -354,6 +354,33 @@ describe('mediaManager', () => {
     });
   });
 
+  // ── Host-only routes ──────────────────────────────────────────────────────
+
+  describe('host-only routes', () => {
+    const GUEST = { 'cf-connecting-ip': '203.0.113.7' };
+    test.each([
+      ['get', '/api/inspect?filePath=/valid/movie.mkv'],
+      ['post', '/api/inspect'],
+      ['post', '/api/prepare'],
+      ['post', '/api/start-party']
+    ])('%s %s is refused for guests', async (method, url) => {
+      setExists(['/valid/movie.mkv']);
+      const { app } = buildApp();
+      const res = await request(app)[method](url).set(GUEST).send({ filePath: '/valid/movie.mkv', audioIndex: '1' });
+      expect(res.status).toBe(403);
+    });
+
+    test('prepare applies the guest permissions the host picked', async () => {
+      setExists(['/valid/movie.mkv']);
+      const { app } = buildApp();
+      await request(app)
+        .post('/api/prepare')
+        .send({ filePath: '/valid/movie.mkv', audioIndex: '1', subIndex: 'none', permissions: { seek: false, junk: 1 } });
+      const permissions = require('../server/permissions');
+      expect(permissions.getPermissions()).toEqual({ playback: true, seek: false, chat: true, reactions: true });
+    });
+  });
+
   // ── GET /api/movie ────────────────────────────────────────────────────────
 
   describe('GET /api/movie', () => {

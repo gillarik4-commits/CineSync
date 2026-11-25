@@ -21,9 +21,10 @@ function makeServer(syncManager) {
   return new Promise((resolve) => server.listen(0, () => resolve(server)));
 }
 
-function wsConnect(server) {
+function wsConnect(server, { guest = false } = {}) {
   const { port } = server.address();
-  const ws = new WebSocket(`ws://localhost:${port}`);
+  // Guests come through the Cloudflare tunnel, which adds this header.
+  const ws = new WebSocket(`ws://localhost:${port}`, guest ? { headers: { 'cf-connecting-ip': '203.0.113.7' } } : {});
   return new Promise((resolve, reject) => {
     ws.once('open', () => resolve(ws));
     ws.once('error', reject);
@@ -525,6 +526,125 @@ describe('syncManager', () => {
       expect(await p).toEqual([]);
 
       await closeAll(ana);
+    });
+  });
+
+  // ── Host & guest permissions ───────────────────────────────────────────────
+
+  describe('permissions', () => {
+    async function room() {
+      const host = await wsConnect(server);
+      const guest = await wsConnect(server, { guest: true });
+      host.send(JSON.stringify({ type: 'USER_JOIN', username: 'Host' }));
+      guest.send(JSON.stringify({ type: 'USER_JOIN', username: 'Guest' }));
+      await new Promise((r) => setTimeout(r, 80));
+      return { host, guest };
+    }
+
+    async function setPerms(host, perms) {
+      host.send(JSON.stringify({ type: 'SET_PERMISSIONS', permissions: perms }));
+      await new Promise((r) => setTimeout(r, 60));
+    }
+
+    test('WELCOME tells each socket whether it is the host', async () => {
+      const { host, guest } = await room();
+      const hp = nextMessage(host);
+      const gp = nextMessage(guest);
+      host.send(JSON.stringify({ type: 'HELLO' }));
+      guest.send(JSON.stringify({ type: 'HELLO' }));
+      expect(await hp).toMatchObject({ type: 'WELCOME', isHost: true, permissions: { playback: true } });
+      expect(await gp).toMatchObject({ type: 'WELCOME', isHost: false });
+      await closeAll(host, guest);
+    });
+
+    test('USER_LIST says who the host is', async () => {
+      const host = await wsConnect(server);
+      const guest = await wsConnect(server, { guest: true });
+      host.send(JSON.stringify({ type: 'USER_JOIN', username: 'Host' }));
+      await new Promise((r) => setTimeout(r, 50));
+      const msgs = collectMessages(host, 3, 500);
+      guest.send(JSON.stringify({ type: 'USER_JOIN', username: 'Guest' }));
+      const list = (await msgs).find((m) => m.type === 'USER_LIST');
+      expect(list.users.sort()).toEqual(['Guest', 'Host']);
+      expect(list.hosts).toEqual(['Host']);
+      await closeAll(host, guest);
+    });
+
+    test('only the host can change permissions; everyone hears about it', async () => {
+      const { host, guest } = await room();
+
+      const denied = collectMessages(guest, 1, 300);
+      guest.send(JSON.stringify({ type: 'SET_PERMISSIONS', permissions: { chat: false } }));
+      expect(await denied).toEqual([{ type: 'PERMISSION_DENIED', capability: 'settings' }]);
+
+      const heard = collectMessages(guest, 1, 300);
+      host.send(JSON.stringify({ type: 'SET_PERMISSIONS', permissions: { seek: false } }));
+      expect(await heard).toEqual([
+        { type: 'PERMISSIONS', by: 'Host', permissions: { playback: true, seek: false, chat: true, reactions: true } }
+      ]);
+      await closeAll(host, guest);
+    });
+
+    test('a guest without playback permission is denied and snapped back; the room is untouched', async () => {
+      const { host, guest } = await room();
+      host.send(JSON.stringify({ type: 'SYNC_ACTION', payload: { action: 'PLAY', currentTime: 100 } }));
+      await setPerms(host, { playback: false });
+
+      const hostHears = collectMessages(host, 1, 300);
+      const guestGets = collectMessages(guest, 2, 400);
+      guest.send(JSON.stringify({ type: 'SYNC_ACTION', payload: { action: 'PAUSE', currentTime: 100 } }));
+
+      const [deny, snap] = await guestGets;
+      expect(deny).toEqual({ type: 'PERMISSION_DENIED', capability: 'playback' });
+      expect(snap.type).toBe('SYNC_ACTION');
+      expect(snap.payload).toMatchObject({ action: 'PLAY', initial: true });
+      expect(await hostHears).toEqual([]);
+      await closeAll(host, guest);
+    });
+
+    test('seek permission is separate from playback', async () => {
+      const { host, guest } = await room();
+      await setPerms(host, { seek: false });
+
+      const hostHears = collectMessages(host, 1, 300);
+      guest.send(JSON.stringify({ type: 'SYNC_ACTION', payload: { action: 'PAUSE', currentTime: 5 } }));
+      expect((await hostHears)[0]).toMatchObject({ type: 'SYNC_ACTION', payload: { action: 'PAUSE', by: 'Guest' } });
+
+      const guestGets = collectMessages(guest, 1, 300);
+      guest.send(JSON.stringify({ type: 'SYNC_ACTION', payload: { action: 'SEEK', currentTime: 500 } }));
+      expect((await guestGets)[0]).toEqual({ type: 'PERMISSION_DENIED', capability: 'seek' });
+      await closeAll(host, guest);
+    });
+
+    test('the host is never restricted', async () => {
+      const { host, guest } = await room();
+      await setPerms(host, { playback: false, seek: false, chat: false, reactions: false });
+
+      const guestHears = collectMessages(guest, 3, 500);
+      host.send(JSON.stringify({ type: 'SYNC_ACTION', payload: { action: 'SEEK', currentTime: 42 } }));
+      host.send(JSON.stringify({ type: 'CHAT_MESSAGE', text: 'host here' }));
+      host.send(JSON.stringify({ type: 'REACTION', emoji: '🔥' }));
+      const types = (await guestHears).map((m) => m.type);
+      expect(types).toEqual(['SYNC_ACTION', 'CHAT_MESSAGE', 'REACTION']);
+      await closeAll(host, guest);
+    });
+
+    test('chat and reactions can be turned off for guests', async () => {
+      const { host, guest } = await room();
+      await setPerms(host, { chat: false, reactions: false });
+
+      const hostHears = collectMessages(host, 1, 300);
+      const guestGets = collectMessages(guest, 3, 400);
+      guest.send(JSON.stringify({ type: 'CHAT_MESSAGE', text: 'hi' }));
+      guest.send(JSON.stringify({ type: 'REACTION', emoji: '😂' }));
+      guest.send(JSON.stringify({ type: 'TYPING', typing: true }));
+
+      expect(await hostHears).toEqual([]);
+      expect(await guestGets).toEqual([
+        { type: 'PERMISSION_DENIED', capability: 'chat' },
+        { type: 'PERMISSION_DENIED', capability: 'reactions' }
+      ]);
+      await closeAll(host, guest);
     });
   });
 });

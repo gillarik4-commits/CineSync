@@ -4,6 +4,8 @@ const path = require('path');
 const ffmpeg = require('fluent-ffmpeg');
 const { getWss } = require('./syncManager');
 const { titleFromPath, saveMovieInfo, loadMovieInfo } = require('./movieInfo');
+const { requireHost } = require('./host');
+const permissions = require('./permissions');
 
 const router = express.Router();
 const MEDIA_DIR = path.join(__dirname, '..', 'media');
@@ -56,16 +58,16 @@ function handleInspect(filePath, res) {
   });
 }
 
-router.get('/api/inspect', (req, res) => {
+router.get('/api/inspect', requireHost, (req, res) => {
   handleInspect(req.query.filePath, res);
 });
 
-router.post('/api/inspect', (req, res) => {
+router.post('/api/inspect', requireHost, (req, res) => {
   handleInspect(req.body.filePath, res);
 });
 
 const handlePrepare = (req, res) => {
-  const { filePath, audioIndex, subIndex, externalSubPath } = req.body;
+  const { filePath, audioIndex, subIndex, externalSubPath, permissions: guestPermissions } = req.body;
   if (!filePath || !fs.existsSync(filePath)) {
     return res.status(400).json({ error: 'File not found' });
   }
@@ -87,6 +89,11 @@ const handlePrepare = (req, res) => {
   }
 
   res.json({ success: true, message: 'Processing started' });
+  // The host picks what guests may do when creating the room.
+  if (guestPermissions && typeof guestPermissions === 'object') {
+    permissions.setPermissions(permissions.normalizePermissions(guestPermissions));
+    broadcast({ type: 'PERMISSIONS', permissions: permissions.getPermissions(), by: null });
+  }
   const preparingInfo = { title: titleFromPath(filePath), fileName: path.basename(filePath) };
 
   if (fs.existsSync(MOVIE_PATH)) fs.unlinkSync(MOVIE_PATH);
@@ -171,13 +178,14 @@ const handlePrepare = (req, res) => {
   });
 };
 
-router.post('/api/prepare', handlePrepare);
-router.post('/api/start-party', handlePrepare);
+router.post('/api/prepare', requireHost, handlePrepare);
+router.post('/api/start-party', requireHost, handlePrepare);
 
 router.get('/api/movie', (req, res) => {
   // Re-derive from the file name so title-cleanup improvements apply to movies
   // that were prepared before them.
-  const title = movieInfo ? titleFromPath(movieInfo.fileName || movieInfo.title) : null;
+  const active = !appStateRef || appStateRef.isPartyActive;
+  const title = movieInfo && active ? titleFromPath(movieInfo.fileName || movieInfo.title) : null;
   res.json({ title });
 });
 

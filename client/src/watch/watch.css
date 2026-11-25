@@ -1418,3 +1418,105 @@ body {
   backdrop-filter: blur(10px);
   color: var(--text-dim);
 }
+
+/* --------------------------------------------------------------------------
+   Host & permissions
+   -------------------------------------------------------------------------- */
+.room-settings {
+  position: relative;
+}
+.room-settings-count {
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.14);
+  font-size: 11px;
+}
+.room-settings-menu {
+  top: calc(100% + 8px);
+  right: 0;
+  width: 300px;
+  transform-origin: top right;
+}
+.room-settings-menu .perm-list {
+  border-color: rgba(255, 255, 255, 0.08);
+}
+.room-settings-note {
+  margin: 8px 6px 4px;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+.participant-host {
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+  font-size: 10.5px;
+  font-weight: 500;
+}
+.scrubber.is-locked {
+  cursor: default;
+}
+.scrubber.is-locked .scrubber-thumb {
+  display: none;
+}
+.scrubber.is-locked:hover .scrubber-track {
+  height: 3px;
+}
+.composer-note,
+.composer-locked {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  color: var(--text-faint);
+  font-size: 13px;
+}
+.composer-locked {
+  margin: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  border-left: 0;
+  border-right: 0;
+  border-bottom: 0;
+  height: 52px;
+  justify-content: center;
+}
+.waiting .join-mark {
+  margin-bottom: 14px;
+}
+.waiting-btn {
+  margin-top: 16px;
+  text-decoration: none;
+}
+.waiting-spinner {
+  margin-top: 20px;
+}
+@media (max-width: 860px), (orientation: landscape) and (max-height: 500px) {
+  .room-settings-label {
+    display: none;
+  }
+  .room-settings-menu {
+    position: fixed;
+    top: 56px;
+    right: 12px;
+    width: min(300px, calc(100vw - 24px));
+  }
+}
+
+.stage-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 9;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.88);
+  text-align: center;
+  cursor: default;
+}

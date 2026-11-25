@@ -5,6 +5,8 @@ const { spawn } = require('child_process');
 const mediaManager = require('./server/mediaManager');
 const syncManager = require('./server/syncManager');
 const fileBrowser = require('./server/fileBrowser');
+const { requireHost } = require('./server/host');
+const { createRouteGuard } = require('./server/routeGuard');
 
 const app = express();
 const server = http.createServer(app);
@@ -21,24 +23,8 @@ mediaManager.setAppState(appState);
 
 app.use(express.json());
 
-// Route guard
-app.use((req, res, next) => {
-  if (req.path === '/' || req.path === '/index.html') {
-    if (appState.isPartyActive) {
-      return res.redirect('/watch.html');
-    } else {
-      return res.redirect('/setup.html');
-    }
-  }
-
-  if (req.path === '/setup.html') {
-    if (appState.isPartyActive) {
-      return res.redirect('/watch.html');
-    }
-  }
-
-  next();
-});
+// Route guard: host → setup until a movie is ready; guests → the watch room
+app.use(createRouteGuard(appState));
 
 app.use(express.static(DIST_DIR));
 app.use('/media', express.static(mediaManager.MEDIA_DIR));
@@ -48,7 +34,7 @@ app.use('/', mediaManager.router);
 app.use('/', fileBrowser.router);
 
 // Reset party endpoint
-app.post('/api/reset-party', (req, res) => {
+app.post('/api/reset-party', requireHost, (req, res) => {
   appState.isPartyActive = false;
   syncManager.resetRoomState();
   const wss = syncManager.getWss();

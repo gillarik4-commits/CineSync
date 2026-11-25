@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { ArrowDown, ChevronDown, ChevronUp, GripHorizontal, SendHorizontal, X } from 'lucide-react';
+import { ArrowDown, ChevronDown, ChevronUp, GripHorizontal, Lock, SendHorizontal, X } from 'lucide-react';
 import { formatTime, userColor } from '../shared/lib/format';
 import Avatar from './Avatar';
 import { TypingLine } from './Presence';
@@ -109,8 +109,15 @@ function MessageList({ messages, me }) {
   );
 }
 
-export function Composer({ onSend, onReact, onTyping, inputRef, placeholder = 'Message the room', autoFocus }) {
+export function Composer({ onSend, onReact, onTyping, inputRef, placeholder = 'Message the room', autoFocus, canChat = true, canReact = true }) {
   const [text, setText] = useState('');
+  if (!canChat && !canReact) {
+    return (
+      <div className="composer composer-locked">
+        <Lock size={13} /> The host has turned off chat and reactions
+      </div>
+    );
+  }
   const send = () => {
     const t = text.trim();
     if (!t) return;
@@ -121,13 +128,20 @@ export function Composer({ onSend, onReact, onTyping, inputRef, placeholder = 'M
   };
   return (
     <div className="composer">
-      <div className="reactions" role="group" aria-label="Send a reaction">
-        {REACTIONS.map((emoji) => (
-          <button key={emoji} type="button" className="reaction-btn" onClick={() => onReact(emoji)} aria-label={`React ${emoji}`}>
-            {emoji}
-          </button>
-        ))}
-      </div>
+      {canReact && (
+        <div className="reactions" role="group" aria-label="Send a reaction">
+          {REACTIONS.map((emoji) => (
+            <button key={emoji} type="button" className="reaction-btn" onClick={() => onReact(emoji)} aria-label={`React ${emoji}`}>
+              {emoji}
+            </button>
+          ))}
+        </div>
+      )}
+      {!canChat ? (
+        <div className="composer-note">
+          <Lock size={13} /> The host has turned off chat
+        </div>
+      ) : (
       <form
         className="composer-row"
         onSubmit={(e) => {
@@ -156,6 +170,7 @@ export function Composer({ onSend, onReact, onTyping, inputRef, placeholder = 'M
           <SendHorizontal size={16} />
         </button>
       </form>
+      )}
     </div>
   );
 }
@@ -165,7 +180,7 @@ export function Composer({ onSend, onReact, onTyping, inputRef, placeholder = 'M
  * room ("theatre"); in fullscreen "panel" mode it floats, can be dragged by its
  * handle, and tucks itself away after 8s idle.
  */
-export function ChatPanel({ variant, messages, me, count, typing, onSend, onReact, onTyping, onClose, inputRef, onActivity }) {
+export function ChatPanel({ variant, messages, me, count, typing, onSend, onReact, onTyping, onClose, inputRef, onActivity, canChat = true, canReact = true }) {
   const floating = variant === 'floating';
   const panelRef = useRef(null);
   const [pos, setPos] = useState(null);
@@ -259,7 +274,7 @@ export function ChatPanel({ variant, messages, me, count, typing, onSend, onReac
         <>
           <MessageList messages={messages} me={me} />
           <TypingLine text={typing} />
-          <Composer onSend={onSend} onReact={onReact} onTyping={onTyping} inputRef={inputRef} />
+          <Composer onSend={onSend} onReact={onReact} onTyping={onTyping} inputRef={inputRef} canChat={canChat} canReact={canReact} />
         </>
       )}
     </aside>

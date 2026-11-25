@@ -19,6 +19,8 @@ import { appendMessage, chatModeOrDefault } from './messages';
 import AmbientGlow from './AmbientGlow';
 import { PauseScreen, ToastStack } from './Presence';
 import { actionText, pushToast, typingText } from './presence';
+import { DEFAULT_PERMISSIONS, deniedText, normalizePermissions, permissionChanges } from '../shared/lib/permissions';
+import RoomSettings from './RoomSettings';
 
 const TYPING_TTL = 5000;
 
@@ -37,7 +39,18 @@ const isTypingTarget = (el) =>
   el && (['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) || el.isContentEditable);
 
 export default function WatchApp() {
-  const [username, setUsername] = useState(null);
+  const [username, setUsername] = useState(() => {
+    // Rejoin automatically after the page reloads for a new movie.
+    try {
+      if (sessionStorage.getItem('cinesync_autojoin') === '1') {
+        sessionStorage.removeItem('cinesync_autojoin');
+        return readStorage('cinesync_username') || null;
+      }
+    } catch {
+      /* ignore */
+    }
+    return null;
+  });
   const appRef = useRef(null);
   const videoRef = useRef(null);
   const chatInputRef = useRef(null);
@@ -50,6 +63,8 @@ export default function WatchApp() {
   const [reactions, setReactions] = useState([]);
   const [mediaChanging, setMediaChanging] = useState(false);
   const [autoplayBlocked, setAutoplayBlocked] = useState(false);
+  const autoplayBlockedRef = useRef(false);
+  autoplayBlockedRef.current = autoplayBlocked;
   const [flash, setFlash] = useState(null);
   const [confirmChange, setConfirmChange] = useState(false);
 
@@ -65,6 +80,19 @@ export default function WatchApp() {
   const [toasts, setToasts] = useState([]);
   const [actor, setActor] = useState(null); // last play/pause: { action, by } (by null = you)
   const [typingUsers, setTypingUsers] = useState({}); // name → expiry
+  const [isHost, setIsHost] = useState(false);
+  const [perms, setPerms] = useState(DEFAULT_PERMISSIONS);
+  const [hosts, setHosts] = useState([]);
+  const [noMovie, setNoMovie] = useState(false);
+  const permsRef = useRef(DEFAULT_PERMISSIONS);
+  const can = {
+    playback: isHost || perms.playback,
+    seek: isHost || perms.seek,
+    chat: isHost || perms.chat,
+    reactions: isHost || perms.reactions
+  };
+  const canRef = useRef(can);
+  canRef.current = { ...can, isHostFlag: isHost };
   const chatVisibleRef = useRef(true);
   const showAmbientRef = useRef(false);
 
@@ -94,6 +122,7 @@ export default function WatchApp() {
   const { send } = useSocket({
     enabled: Boolean(username),
     onOpen: (ws) => {
+      ws.send(JSON.stringify({ type: 'HELLO' }));
       ws.send(JSON.stringify({ type: 'USER_JOIN', username }));
       ws.send(JSON.stringify({ type: 'REQUEST_STATE' }));
     },
@@ -154,6 +183,27 @@ export default function WatchApp() {
           break;
         case 'USER_LIST':
           if (Array.isArray(data.users)) setUsers(data.users);
+          if (Array.isArray(data.hosts)) setHosts(data.hosts);
+          break;
+        case 'WELCOME': {
+          const next = normalizePermissions(data.permissions);
+          permsRef.current = next;
+          setIsHost(Boolean(data.isHost));
+          setPerms(next);
+          break;
+        }
+        case 'PERMISSIONS': {
+          const next = normalizePermissions(data.permissions);
+          // Guests get told what changed; the host just made the change themselves.
+          if (!canRef.current.isHostFlag) {
+            permissionChanges(permsRef.current, next).forEach((text) => toast({ key: `perm:${text}`, text }));
+          }
+          permsRef.current = next;
+          setPerms(next);
+          break;
+        }
+        case 'PERMISSION_DENIED':
+          toast({ key: `deny:${data.capability}`, text: deniedText(data.capability) });
           break;
         case 'REACTION':
           spawnReaction(data.emoji);
@@ -163,6 +213,12 @@ export default function WatchApp() {
           setMediaChanging(true);
           break;
         case 'MEDIA_READY':
+          // Come straight back into the room after the reload, no join screen.
+          try {
+            sessionStorage.setItem('cinesync_autojoin', '1');
+          } catch {
+            /* ignore */
+          }
           window.location.reload();
           break;
         default:
@@ -205,6 +261,8 @@ export default function WatchApp() {
     (action) => {
       const v = videoRef.current;
       if (!v || isRemote()) return;
+      // Without permission a guest's own play/seek is just catching up; keep it local.
+      if ((action === 'SEEK' && !canRef.current.seek) || (action !== 'SEEK' && !canRef.current.playback)) return;
       send({ type: 'SYNC_ACTION', payload: { action, currentTime: v.currentTime } });
     },
     [send]
@@ -248,6 +306,11 @@ export default function WatchApp() {
       window.clearTimeout(pendingPause.current);
       pendingPause.current = window.setTimeout(() => {
         if (document.hidden || Date.now() - hiddenAt.current < 1000) return;
+        if (!canRef.current.playback) {
+          // Not allowed to pause the room (e.g. the iPhone's own player paused): rejoin it.
+          send({ type: 'REQUEST_STATE' });
+          return;
+        }
         setActor({ action: 'PAUSE', by: null });
         send({ type: 'SYNC_ACTION', payload: { action: 'PAUSE', currentTime: time } });
       }, 300);
@@ -267,6 +330,10 @@ export default function WatchApp() {
   const togglePlay = useCallback(() => {
     const v = videoRef.current;
     if (!v) return;
+    if (!canRef.current.playback && !autoplayBlockedRef.current) {
+      toast({ key: 'deny:playback', text: deniedText('playback') });
+      return;
+    }
     if (v.paused) {
       v.play().catch(() => setAutoplayBlocked(true));
       showFlash('play');
@@ -281,6 +348,10 @@ export default function WatchApp() {
     (time) => {
       const v = videoRef.current;
       if (!v) return;
+      if (!canRef.current.seek) {
+        toast({ key: 'deny:seek', text: deniedText('seek') });
+        return;
+      }
       v.currentTime = Math.max(0, Math.min(v.duration || 0, time));
       broadcast('SEEK');
       poke();
@@ -313,6 +384,7 @@ export default function WatchApp() {
   const typingState = useRef({ on: false, sentAt: 0, timer: 0 });
   const sendTyping = useCallback(
     (isTyping) => {
+      if (!canRef.current.chat) return;
       const t = typingState.current;
       window.clearTimeout(t.timer);
       if (isTyping) {
@@ -339,13 +411,16 @@ export default function WatchApp() {
         text,
         username,
         timestamp: Date.now(),
-        movieTime: videoRef.current ? videoRef.current.currentTime : null
+        movieTime: videoRef.current?.duration ? videoRef.current.currentTime : null
       });
     },
     [send, sendTyping, username]
   );
 
-  const sendReaction = useCallback((emoji) => send({ type: 'REACTION', emoji }), [send]);
+  const sendReaction = useCallback(
+    (emoji) => (canRef.current.reactions ? send({ type: 'REACTION', emoji }) : false),
+    [send]
+  );
 
   function spawnReaction(emoji) {
     const id = Math.random().toString(36).slice(2);
@@ -487,7 +562,7 @@ export default function WatchApp() {
       if (document.querySelector('.dialog-backdrop')) return;
       if (isTypingTarget(document.activeElement)) return;
 
-      if (e.key === 'Enter' && showAmbient && !replyOpen && !e.repeat) {
+      if (e.key === 'Enter' && showAmbient && !replyOpen && !e.repeat && canRef.current.chat) {
         e.preventDefault();
         document.activeElement?.blur?.();
         setReplyOpen(true);
@@ -562,6 +637,8 @@ export default function WatchApp() {
           preload="metadata"
           playsInline
           crossOrigin="anonymous"
+          onError={() => setNoMovie(true)}
+          onLoadedMetadata={() => setNoMovie(false)}
         >
           <track ref={trackRef} kind="subtitles" src={subtitleSrc} srcLang="en" label="Subtitles" default />
         </video>
@@ -593,8 +670,14 @@ export default function WatchApp() {
             )}
           </div>
           <div className="topbar-actions">
+            {isHost && <RoomSettings permissions={perms} onChange={(next) => {
+              permsRef.current = next;
+              setPerms(next);
+              send({ type: 'SET_PERMISSIONS', permissions: next });
+            }} />}
             <Participants
               users={users}
+              hosts={hosts}
               count={count}
               me={username}
               open={participantsOpen}
@@ -634,6 +717,7 @@ export default function WatchApp() {
 
         {showAmbient && (
           <AmbientLayer
+            canChat={can.chat}
             messages={messages}
             replyOpen={replyOpen}
             onCloseReply={closeReply}
@@ -662,6 +746,25 @@ export default function WatchApp() {
           </div>
         )}
 
+        {username && noMovie && !mediaChanging && (
+          <div className="stage-overlay waiting" onClick={(e) => e.stopPropagation()}>
+            <span className="join-mark">
+              <LogoMark size={26} />
+            </span>
+            <p className="overlay-title">{isHost ? 'No movie is playing' : 'Waiting for the host'}</p>
+            <p className="overlay-sub">
+              {isHost ? 'Pick something to watch to start the party.' : 'The movie will start here as soon as it’s ready.'}
+            </p>
+            {isHost ? (
+              <a className="btn btn-primary btn-sm waiting-btn" href="/">
+                Choose a movie
+              </a>
+            ) : (
+              <div className="spinner waiting-spinner" />
+            )}
+          </div>
+        )}
+
         <Controls
           videoRef={videoRef}
           onTogglePlay={togglePlay}
@@ -683,7 +786,9 @@ export default function WatchApp() {
           chatMenu={
             <ChatModeMenu open={modeMenuOpen} mode={chatMode} onSelect={setChatMode} onClose={() => setModeMenuOpen(false)} />
           }
-          onChangeMovie={() => setConfirmChange(true)}
+          onChangeMovie={isHost ? () => setConfirmChange(true) : null}
+          canPlayback={can.playback}
+          canSeek={can.seek}
           onScrubbingChange={setScrubbing}
         />
       </div>
@@ -699,6 +804,8 @@ export default function WatchApp() {
             transition={{ duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
           >
             <ChatPanel
+              canChat={can.chat}
+              canReact={can.reactions}
               variant={showFloatingPanel ? 'floating' : 'theatre'}
               messages={messages}
               me={username}
@@ -747,7 +854,7 @@ export default function WatchApp() {
   );
 }
 
-function Participants({ users, count, me, open, setOpen }) {
+function Participants({ users, hosts = [], count, me, open, setOpen }) {
   const ref = useRef(null);
   useEffect(() => {
     if (!open) return undefined;
@@ -799,6 +906,7 @@ function Participants({ users, count, me, open, setOpen }) {
                 <div key={`${u}-${i}`} className="participant">
                   <Avatar name={u} size={24} />
                   <span className="participant-name">{u}</span>
+                  {hosts.includes(u) && <span className="participant-host">Host</span>}
                   {u === me && <span className="participant-you">You</span>}
                 </div>
               ))

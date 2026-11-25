@@ -18,6 +18,8 @@ import ShinyText from '../shared/components/reactbits/ShinyText';
 import SpotlightCard from '../shared/components/reactbits/SpotlightCard';
 import Logo from '../shared/components/Logo';
 import FileBrowser from './FileBrowser';
+import PermissionList from '../shared/components/PermissionList';
+import { normalizePermissions } from '../shared/lib/permissions';
 import { api } from '../shared/lib/api';
 import { basename, dirname, formatDuration } from '../shared/lib/format';
 import { readJSON, writeJSON } from '../shared/lib/storage';
@@ -25,6 +27,7 @@ import { useSocket } from '../shared/hooks/useSocket';
 import { codecName, isImageSubtitle, prettyTrackLabel, videoCompatibilityNote } from './tracks';
 
 const RECENT_KEY = 'cinesync_recent_files';
+const PERMS_KEY = 'cinesync_guest_permissions';
 const STEPS = ['Choose', 'Tracks', 'Prepare'];
 
 const stepMotion = {
@@ -47,6 +50,11 @@ export default function SetupApp() {
   const [progress, setProgress] = useState(null);
   const [done, setDone] = useState(false);
   const [browser, setBrowser] = useState(null); // null | 'video' | 'subtitle'
+  const [guestPerms, setGuestPermsState] = useState(() => normalizePermissions(readJSON(PERMS_KEY, null)));
+  const setGuestPerms = (next) => {
+    setGuestPermsState(next);
+    writeJSON(PERMS_KEY, next);
+  };
   const [recent, setRecent] = useState(() => readJSON(RECENT_KEY, []).filter((p) => typeof p === 'string'));
   const stepRef = useRef(step);
   stepRef.current = step;
@@ -119,7 +127,8 @@ export default function SetupApp() {
           filePath,
           audioIndex: audio,
           subIndex: external ? 'external' : subtitle,
-          externalSubPath: external || undefined
+          externalSubPath: external || undefined,
+          permissions: guestPerms
         }
       });
     } catch (err) {
@@ -208,6 +217,8 @@ export default function SetupApp() {
                       setExternalSub={setExternalSub}
                       error={prepareError}
                       onBrowseSub={() => setBrowser('subtitle')}
+                      guestPerms={guestPerms}
+                      setGuestPerms={setGuestPerms}
                       onChangeFile={changeFile}
                       onStart={start}
                     />
@@ -366,7 +377,9 @@ function TracksStep({
   error,
   onBrowseSub,
   onChangeFile,
-  onStart
+  onStart,
+  guestPerms,
+  setGuestPerms
 }) {
   const duration = formatDuration(media.duration);
   const usingExternal = externalSub.trim().length > 0;
@@ -464,6 +477,12 @@ function TracksStep({
           )}
         </div>
         <span className="field-hint">An .srt or .vtt file. It replaces the embedded subtitles.</span>
+      </div>
+
+      <div className="field">
+        <span className="field-label">What guests can do</span>
+        <PermissionList value={guestPerms} onChange={setGuestPerms} idPrefix="setup-perm" />
+        <span className="field-hint">You always have full control. You can change these during the movie too.</span>
       </div>
 
       {error && (

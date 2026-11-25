@@ -37,6 +37,14 @@ Ensure you have the following installed on your system before proceeding:
    - Pick the audio track and subtitles, then click **Start watch party**.
    - When it's ready, click **Invite** to copy the public link and send it to your friends.
 
+## Host & guests 🛡️
+
+- **The host** is whoever uses CineSync on the computer it runs on (`http://localhost:3000`). The host can always do everything, including picking or changing the movie.
+- **Guests** are everyone who joins through the share link. They land straight in the watch room; if no movie is ready yet they see a waiting screen (and can already chat).
+- When creating the room, the host chooses what guests can do: **play and pause**, **skip around**, **chat**, and **reactions**. These can be changed during the movie from the **Host** button in the top bar.
+- Changing the movie is always host-only, because it means browsing files on the host's computer.
+- Everything is enforced by the server, not just hidden in the page.
+
 ## Development 🧑‍💻
 
 ```bash
