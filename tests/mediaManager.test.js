@@ -384,6 +384,29 @@ describe('mediaManager', () => {
     });
   });
 
+  // ── parseRange ────────────────────────────────────────────────────────────
+
+  describe('parseRange', () => {
+    const { parseRange } = jest.requireActual('../server/mediaManager');
+    test.each([
+      ['bytes=0-99', { start: 0, end: 99 }],
+      ['bytes=100-', { start: 100, end: 999 }],
+      ['bytes=900-5000', { start: 900, end: 999 }],
+      ['bytes=-200', { start: 800, end: 999 }],
+      ['bytes=-5000', { start: 0, end: 999 }],
+      ['bytes=0-1', { start: 0, end: 1 }],
+      ['bytes=0-99, 200-299', { start: 0, end: 99 }],
+      ['bytes=1000-', null],
+      ['bytes=50-10', null],
+      ['bytes=-0', null],
+      ['bytes=-', undefined],
+      ['items=0-5', undefined],
+      ['garbage', undefined]
+    ])('%s on a 1000-byte file → %p', (header, expected) => {
+      expect(parseRange(header, 1000)).toEqual(expected);
+    });
+  });
+
   // ── GET /video ────────────────────────────────────────────────────────────
 
   describe('GET /video', () => {

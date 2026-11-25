@@ -17,6 +17,8 @@ function titleFromPath(filePath) {
     .pop()
     .replace(/\.[a-z0-9]{2,4}$/i, '');
   let text = base.replace(/[._]+/g, ' ').replace(/\s+/g, ' ').trim();
+  // "the-last-of-us" style names use dashes as spaces.
+  if (!text.includes(' ') && /[a-z]-[a-z]/i.test(text)) text = text.replace(/-+/g, ' ');
   if (!text) return 'Untitled';
 
   const release = RELEASE_TOKEN.exec(text);

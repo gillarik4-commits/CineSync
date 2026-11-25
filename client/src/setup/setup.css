@@ -9,7 +9,8 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 0 16px;
+  padding: env(safe-area-inset-top) max(16px, env(safe-area-inset-right)) env(safe-area-inset-bottom)
+    max(16px, env(safe-area-inset-left));
 }
 
 .setup-top {

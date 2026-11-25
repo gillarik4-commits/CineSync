@@ -13,6 +13,7 @@ import { ChatModeMenu, ChatPanel } from './Chat';
 import Avatar from './Avatar';
 import { useFullscreen } from './hooks/useFullscreen';
 import { useIdle } from './hooks/useIdle';
+import { PHONE_LANDSCAPE, useMediaQuery } from './hooks/useMediaQuery';
 import { usePlayback } from './hooks/useVideo';
 import { appendMessage, chatModeOrDefault } from './messages';
 import AmbientGlow from './AmbientGlow';
@@ -65,8 +66,22 @@ export default function WatchApp() {
   const [actor, setActor] = useState(null); // last play/pause: { action, by } (by null = you)
   const [typingUsers, setTypingUsers] = useState({}); // name → expiry
   const chatVisibleRef = useRef(true);
+  const showAmbientRef = useRef(false);
 
   const [isFullscreen, toggleFullscreen] = useFullscreen(appRef, videoRef);
+
+  // Phone turned sideways: give the movie the whole screen (chat becomes bubbles).
+  // Turning back restores the saved preference.
+  const phoneLandscape = useMediaQuery(PHONE_LANDSCAPE);
+  const firstOrientation = useRef(true);
+  useEffect(() => {
+    if (firstOrientation.current && !phoneLandscape) {
+      firstOrientation.current = false;
+      return;
+    }
+    firstOrientation.current = false;
+    setChatOpen(phoneLandscape ? false : readStorage('cinesync_chat_open') !== 'false');
+  }, [phoneLandscape]);
   const { paused, waiting } = usePlayback(videoRef);
   const [active, poke] = useIdle(3000);
   const controlsVisible = paused || active || scrubbing || modeMenuOpen || participantsOpen || replyOpen;
@@ -121,8 +136,11 @@ export default function WatchApp() {
           break;
         case 'SYSTEM_MESSAGE':
           setMessages((list) => appendMessage(list, { kind: 'system', text: data.text, timestamp: Date.now() }));
-          // With the chat panel closed, joins and leaves would go unnoticed.
-          if (!chatVisibleRef.current) toast({ key: `sys:${data.text}`, text: data.text });
+          // Only when chat is fully hidden (fullscreen "off"); ambient bubbles already show
+          // joins and leaves, and there's no point announcing your own arrival.
+          if (!chatVisibleRef.current && !showAmbientRef.current && !String(data.text).startsWith(`${username} `)) {
+            toast({ key: `sys:${data.text}`, text: data.text });
+          }
           break;
         case 'TYPING':
           if (!data.username || data.username === username) break;
@@ -192,26 +210,56 @@ export default function WatchApp() {
     [send]
   );
 
+  // Phones pause the video when the screen locks or the browser goes to the
+  // background. Those pauses must stay local, or one phone pauses the whole room.
+  const hiddenAt = useRef(0);
+  const pendingPause = useRef(0);
+  useEffect(() => {
+    const onHide = () => {
+      hiddenAt.current = Date.now();
+    };
+    const onVisibility = () => {
+      if (document.hidden) onHide();
+      // Back from the background: catch up with wherever the room is now.
+      else if (username) send({ type: 'REQUEST_STATE' });
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', onHide);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', onHide);
+    };
+  }, [send, username]);
+
   // Local play/pause (from any source: buttons, keys, clicking the video) goes to the room.
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return undefined;
     const onPlay = () => {
+      window.clearTimeout(pendingPause.current); // a quick pause→play never reaches the room
       setAutoplayBlocked(false);
       if (!isRemote()) setActor({ action: 'PLAY', by: null });
       broadcast('PLAY');
     };
     const onPause = () => {
-      if (!isRemote()) setActor({ action: 'PAUSE', by: null });
-      broadcast('PAUSE');
+      if (isRemote()) return;
+      const time = v.currentTime;
+      // iOS can fire "pause" just before the page reports it's hidden, so wait a beat.
+      window.clearTimeout(pendingPause.current);
+      pendingPause.current = window.setTimeout(() => {
+        if (document.hidden || Date.now() - hiddenAt.current < 1000) return;
+        setActor({ action: 'PAUSE', by: null });
+        send({ type: 'SYNC_ACTION', payload: { action: 'PAUSE', currentTime: time } });
+      }, 300);
     };
     v.addEventListener('play', onPlay);
     v.addEventListener('pause', onPause);
     return () => {
+      window.clearTimeout(pendingPause.current);
       v.removeEventListener('play', onPlay);
       v.removeEventListener('pause', onPause);
     };
-  }, [broadcast]);
+  }, [broadcast, send]);
 
   // ---------------------------------------------------------------- player actions
   const showFlash = (icon) => setFlash({ icon, key: Date.now() });
@@ -316,16 +364,17 @@ export default function WatchApp() {
       setModeMenuOpen((o) => !o);
     } else {
       setChatOpen((open) => {
-        writeStorage('cinesync_chat_open', String(!open));
+        if (!phoneLandscape) writeStorage('cinesync_chat_open', String(!open));
         return !open;
       });
     }
-  }, [isFullscreen]);
+  }, [isFullscreen, phoneLandscape]);
 
   const chatVisible = isFullscreen ? chatMode !== 'off' : chatOpen;
   chatVisibleRef.current = chatVisible;
   // Ambient bubbles: fullscreen ambient mode, or the room with the chat panel closed.
   const showAmbient = isFullscreen ? chatMode === 'ambient' : !chatOpen;
+  showAmbientRef.current = showAmbient;
   const typingLabel = typingText(Object.keys(typingUsers));
 
   // Unread dot: someone else spoke while chat wasn't on screen.
@@ -405,6 +454,28 @@ export default function WatchApp() {
       el.removeEventListener('load', onLoad);
       el.removeEventListener('error', onError);
       track.removeEventListener('cuechange', onCue);
+    };
+  }, []);
+
+  // iPhone fullscreen is Apple's own player, which can't show our overlay. While
+  // it's open, let the browser draw the subtitles; hand them back afterwards.
+  const captionsOnRef = useRef(false);
+  captionsOnRef.current = captions.on;
+  useEffect(() => {
+    const v = videoRef.current;
+    const track = trackRef.current?.track;
+    if (!v || !track) return undefined;
+    const onBegin = () => {
+      if (captionsOnRef.current) track.mode = 'showing';
+    };
+    const onEnd = () => {
+      track.mode = 'hidden';
+    };
+    v.addEventListener('webkitbeginfullscreen', onBegin);
+    v.addEventListener('webkitendfullscreen', onEnd);
+    return () => {
+      v.removeEventListener('webkitbeginfullscreen', onBegin);
+      v.removeEventListener('webkitendfullscreen', onEnd);
     };
   }, []);
 

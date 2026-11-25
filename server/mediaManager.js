@@ -175,47 +175,64 @@ router.post('/api/prepare', handlePrepare);
 router.post('/api/start-party', handlePrepare);
 
 router.get('/api/movie', (req, res) => {
-  res.json({ title: movieInfo ? movieInfo.title : null });
+  // Re-derive from the file name so title-cleanup improvements apply to movies
+  // that were prepared before them.
+  const title = movieInfo ? titleFromPath(movieInfo.fileName || movieInfo.title) : null;
+  res.json({ title });
 });
+
+/**
+ * Parse a single HTTP Range header against a file size.
+ * Returns { start, end } to serve, null if it can't be satisfied (→ 416),
+ * or undefined if the header is unusable and the whole file should be sent.
+ */
+function parseRange(header, size) {
+  const match = /^bytes=(\d*)-(\d*)$/.exec(String(header || '').split(',')[0].trim());
+  if (!match || (match[1] === '' && match[2] === '')) return undefined;
+
+  if (match[1] === '') {
+    // "bytes=-500" means the last 500 bytes.
+    const suffix = parseInt(match[2], 10);
+    if (suffix === 0 || size === 0) return null;
+    return { start: Math.max(0, size - suffix), end: size - 1 };
+  }
+
+  const start = parseInt(match[1], 10);
+  const end = match[2] === '' ? size - 1 : Math.min(parseInt(match[2], 10), size - 1);
+  if (start >= size || end < start) return null;
+  return { start, end };
+}
 
 router.get('/video', (req, res) => {
   if (!fs.existsSync(MOVIE_PATH)) {
     return res.status(404).send('Movie not ready');
   }
 
-  const stat = fs.statSync(MOVIE_PATH);
-  const fileSize = stat.size;
-  const range = req.headers.range;
+  const fileSize = fs.statSync(MOVIE_PATH).size;
+  const range = req.headers.range ? parseRange(req.headers.range, fileSize) : undefined;
+
+  if (range === null) {
+    res.writeHead(416, { 'Content-Range': `bytes */${fileSize}` });
+    return res.end();
+  }
 
   if (range) {
-    const parts = range.replace(/bytes=/, "").split("-");
-    const start = parseInt(parts[0], 10);
-    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-
-    if (start >= fileSize) {
-      res.status(416).send('Requested range not satisfiable\\n' + start + ' >= ' + fileSize);
-      return;
-    }
-
-    const chunksize = (end - start) + 1;
-    const file = fs.createReadStream(MOVIE_PATH, { start, end });
-    const head = {
+    const { start, end } = range;
+    res.writeHead(206, {
       'Content-Range': `bytes ${start}-${end}/${fileSize}`,
       'Accept-Ranges': 'bytes',
-      'Content-Length': chunksize,
-      'Content-Type': 'video/mp4',
-    };
-    res.writeHead(206, head);
-    file.pipe(res);
+      'Content-Length': end - start + 1,
+      'Content-Type': 'video/mp4'
+    });
+    fs.createReadStream(MOVIE_PATH, { start, end }).pipe(res);
   } else {
-    const head = {
+    res.writeHead(200, {
       'Content-Length': fileSize,
       'Content-Type': 'video/mp4',
-      'Accept-Ranges': 'bytes',
-    };
-    res.writeHead(200, head);
+      'Accept-Ranges': 'bytes'
+    });
     fs.createReadStream(MOVIE_PATH).pipe(res);
   }
 });
 
-module.exports = { router, setAppState, MEDIA_DIR, MOVIE_PATH };
+module.exports = { router, setAppState, parseRange, MEDIA_DIR, MOVIE_PATH };

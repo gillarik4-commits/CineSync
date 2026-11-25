@@ -15,6 +15,8 @@ describe('titleFromPath', () => {
     ['1917.mkv', '1917'],
     ['1917.2019.1080p.mkv', '1917 (2019)'],
     ['C:\\Films\\Arrival.2016.mkv', 'Arrival (2016)'],
+    ['the-last-of-us-abandoned-window-live-wallpaper.mp4', 'The Last Of Us Abandoned Window Live Wallpaper'],
+    ['Spider-Man.Into.the.Spider-Verse.2018.mkv', 'Spider-Man Into the Spider-Verse (2018)'],
     ['', 'Untitled']
   ])('%s → %s', (input, expected) => {
     expect(titleFromPath(input)).toBe(expected);
