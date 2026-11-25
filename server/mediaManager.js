@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const ffmpeg = require('fluent-ffmpeg');
 const { getWss } = require('./syncManager');
+const { titleFromPath, saveMovieInfo, loadMovieInfo } = require('./movieInfo');
 
 const router = express.Router();
 const MEDIA_DIR = path.join(__dirname, '..', 'media');
@@ -14,6 +15,7 @@ if (!fs.existsSync(MEDIA_DIR)) {
 }
 
 let appStateRef = null;
+let movieInfo = loadMovieInfo(MEDIA_DIR);
 
 function setAppState(state) {
   appStateRef = state;
@@ -85,6 +87,7 @@ const handlePrepare = (req, res) => {
   }
 
   res.json({ success: true, message: 'Processing started' });
+  const preparingInfo = { title: titleFromPath(filePath), fileName: path.basename(filePath) };
 
   if (fs.existsSync(MOVIE_PATH)) fs.unlinkSync(MOVIE_PATH);
   if (fs.existsSync(SUBTITLE_PATH)) fs.unlinkSync(SUBTITLE_PATH);
@@ -150,6 +153,8 @@ const handlePrepare = (req, res) => {
     });
 
     cmd.on('end', () => {
+      movieInfo = preparingInfo;
+      saveMovieInfo(MEDIA_DIR, movieInfo);
       if (appStateRef) {
         appStateRef.isPartyActive = true;
       }
@@ -168,6 +173,10 @@ const handlePrepare = (req, res) => {
 
 router.post('/api/prepare', handlePrepare);
 router.post('/api/start-party', handlePrepare);
+
+router.get('/api/movie', (req, res) => {
+  res.json({ title: movieInfo ? movieInfo.title : null });
+});
 
 router.get('/video', (req, res) => {
   if (!fs.existsSync(MOVIE_PATH)) {

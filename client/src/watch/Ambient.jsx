@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { CornerDownLeft } from 'lucide-react';
 import { MAX_CHAT_LENGTH } from './Chat';
 import { userColor } from '../shared/lib/format';
+import { TypingLine } from './Presence';
 import { readStorage, writeStorage } from '../shared/lib/storage';
 
 const CHIP_LIFETIME = 6000;
@@ -53,7 +54,7 @@ function Chip({ message, paused, onExpire }) {
  * Fullscreen "ambient" chat: new messages appear as bubbles over the movie and
  * fade away. Enter opens a one-line reply bar.
  */
-export default function AmbientLayer({ messages, replyOpen, onCloseReply, onOpenReply, onSend }) {
+export default function AmbientLayer({ messages, replyOpen, onCloseReply, onOpenReply, onSend, typing, onTyping }) {
   const [chips, setChips] = useState([]);
   const lastId = useRef(messages[messages.length - 1]?.id ?? 0);
   const [text, setText] = useState('');
@@ -75,6 +76,7 @@ export default function AmbientLayer({ messages, replyOpen, onCloseReply, onOpen
   useEffect(() => {
     if (!replyOpen) {
       setText('');
+      onTyping?.(false);
       return undefined;
     }
     inputRef.current?.focus();
@@ -110,6 +112,8 @@ export default function AmbientLayer({ messages, replyOpen, onCloseReply, onOpen
         </AnimatePresence>
       </div>
 
+      <TypingLine text={typing} className="typing-ambient" />
+
       <AnimatePresence mode="wait" initial={false}>
         {replyOpen ? (
           <motion.form
@@ -129,7 +133,10 @@ export default function AmbientLayer({ messages, replyOpen, onCloseReply, onOpen
               type="text"
               value={text}
               maxLength={MAX_CHAT_LENGTH}
-              onChange={(e) => setText(e.target.value)}
+              onChange={(e) => {
+                setText(e.target.value);
+                onTyping?.(e.target.value.trim().length > 0);
+              }}
               onKeyDown={(e) => {
                 e.stopPropagation();
                 if (e.key === 'Escape') {

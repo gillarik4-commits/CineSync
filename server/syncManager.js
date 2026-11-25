@@ -4,8 +4,25 @@ let wss = null;
 let roomState = {
   currentVideoTime: 0,
   isPlaying: false,
-  lastUpdated: Date.now()
+  lastUpdated: Date.now(),
+  lastBy: null
 };
+
+const MAX_CHAT_LENGTH = 500;
+
+function sendToOthers(sender, message) {
+  const payload = JSON.stringify(message);
+  wss.clients.forEach(client => {
+    if (client !== sender && client.readyState === WebSocket.OPEN) client.send(payload);
+  });
+}
+
+function sendToAll(message) {
+  const payload = JSON.stringify(message);
+  wss.clients.forEach(client => {
+    if (client.readyState === WebSocket.OPEN) client.send(payload);
+  });
+}
 
 let activeUsers = 0;
 
@@ -47,9 +64,15 @@ function init(server) {
           if (roomState.isPlaying) {
             interpolatedTime += (Date.now() - roomState.lastUpdated) / 1000;
           }
+          // `initial` tells the client this is a catch-up, not someone acting right now.
           ws.send(JSON.stringify({
             type: 'SYNC_ACTION',
-            payload: { currentTime: interpolatedTime, action: roomState.isPlaying ? 'PLAY' : 'PAUSE' }
+            payload: {
+              currentTime: interpolatedTime,
+              action: roomState.isPlaying ? 'PLAY' : 'PAUSE',
+              initial: true,
+              by: roomState.lastBy
+            }
           }));
         } 
         else if (data.type === 'SYNC_ACTION') {
@@ -62,18 +85,26 @@ function init(server) {
           if (action === 'PLAY') roomState.isPlaying = true;
           else if (action === 'PAUSE') roomState.isPlaying = false;
           roomState.lastUpdated = Date.now();
-          
-          wss.clients.forEach(client => {
-            if (client !== ws && client.readyState === WebSocket.OPEN) {
-              client.send(JSON.stringify({ type: 'SYNC_ACTION', payload: data.payload }));
-            }
-          });
+          roomState.lastBy = ws.username || null;
+
+          // Tell everyone else who did it, so they can see "Paused by Priya".
+          sendToOthers(ws, { type: 'SYNC_ACTION', payload: { ...data.payload, by: ws.username || null } });
+        }
+        else if (data.type === 'TYPING') {
+          if (ws.username) {
+            sendToOthers(ws, { type: 'TYPING', username: ws.username, typing: Boolean(data.typing) });
+          }
         }
         else if (data.type === 'CHAT_MESSAGE') {
-          wss.clients.forEach(client => {
-            if (client.readyState === WebSocket.OPEN) {
-              client.send(JSON.stringify(data));
-            }
+          const text = String(data.text || '').trim().slice(0, MAX_CHAT_LENGTH);
+          if (!text) return;
+          sendToAll({
+            type: 'CHAT_MESSAGE',
+            // Use the name this socket joined with, so nobody can post as someone else.
+            username: ws.username || String(data.username || 'Anonymous'),
+            text,
+            timestamp: Number.isFinite(data.timestamp) ? data.timestamp : Date.now(),
+            movieTime: Number.isFinite(data.movieTime) ? data.movieTime : null
           });
         }
         else if (data.type === 'REACTION') {
@@ -99,6 +130,8 @@ function init(server) {
             c.send(JSON.stringify({ type: 'USER_LIST', users: currentUsers }));
           }
         });
+        // Clear any "is typing…" left behind by someone who just left.
+        sendToOthers(ws, { type: 'TYPING', username: ws.username, typing: false });
       }
     });
   });
@@ -108,6 +141,7 @@ function resetRoomState() {
   roomState.currentVideoTime = 0;
   roomState.isPlaying = false;
   roomState.lastUpdated = Date.now();
+  roomState.lastBy = null;
 }
 
 function getWss() {

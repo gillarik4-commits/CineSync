@@ -238,6 +238,28 @@ describe('syncManager', () => {
       await closeAll(ws);
     });
 
+    test('tells other viewers who acted, and late joiners who acted last', async () => {
+      const ana = await wsConnect(server);
+      const ben = await wsConnect(server);
+      ana.send(JSON.stringify({ type: 'USER_JOIN', username: 'Ana' }));
+      ben.send(JSON.stringify({ type: 'USER_JOIN', username: 'Ben' }));
+      await new Promise((r) => setTimeout(r, 80));
+
+      const received = collectMessages(ben, 1, 500);
+      ana.send(JSON.stringify({ type: 'SYNC_ACTION', payload: { currentTime: 12, action: 'PAUSE' } }));
+      const [msg] = await received;
+      expect(msg).toEqual({ type: 'SYNC_ACTION', payload: { currentTime: 12, action: 'PAUSE', by: 'Ana' } });
+
+      const late = await wsConnect(server);
+      await new Promise((r) => setTimeout(r, 30));
+      const p = nextMessage(late);
+      late.send(JSON.stringify({ type: 'REQUEST_STATE' }));
+      const state = await p;
+      expect(state.payload).toMatchObject({ action: 'PAUSE', currentTime: 12, initial: true, by: 'Ana' });
+
+      await closeAll(ana, ben, late);
+    });
+
     test('ignores a sync message without a valid time', async () => {
       const ws = await wsConnect(server);
       await new Promise((r) => setTimeout(r, 30));
@@ -425,6 +447,84 @@ describe('syncManager', () => {
       const wss = syncManager.getWss();
       expect(wss).not.toBeNull();
       expect(typeof wss.clients).toBe('object');
+    });
+  });
+
+  // ── TYPING & chat hardening ────────────────────────────────────────────────
+
+  describe('TYPING', () => {
+    test('relays typing to others with the joined name, not to the sender', async () => {
+      const ana = await wsConnect(server);
+      const ben = await wsConnect(server);
+      ana.send(JSON.stringify({ type: 'USER_JOIN', username: 'Ana' }));
+      ben.send(JSON.stringify({ type: 'USER_JOIN', username: 'Ben' }));
+      await new Promise((r) => setTimeout(r, 80));
+
+      const benGets = collectMessages(ben, 1, 400);
+      const anaGets = collectMessages(ana, 1, 200);
+      ana.send(JSON.stringify({ type: 'TYPING', typing: true, username: 'Spoofed' }));
+      expect(await benGets).toEqual([{ type: 'TYPING', username: 'Ana', typing: true }]);
+      expect(await anaGets).toEqual([]);
+
+      await closeAll(ana, ben);
+    });
+
+    test('ignores typing from someone who has not joined', async () => {
+      const anon = await wsConnect(server);
+      const ben = await wsConnect(server);
+      ben.send(JSON.stringify({ type: 'USER_JOIN', username: 'Ben' }));
+      await new Promise((r) => setTimeout(r, 80));
+
+      const benGets = collectMessages(ben, 1, 250);
+      anon.send(JSON.stringify({ type: 'TYPING', typing: true }));
+      expect(await benGets).toEqual([]);
+
+      await closeAll(anon, ben);
+    });
+
+    test('clears typing for someone who leaves', async () => {
+      const ana = await wsConnect(server);
+      const ben = await wsConnect(server);
+      ana.send(JSON.stringify({ type: 'USER_JOIN', username: 'Ana' }));
+      ben.send(JSON.stringify({ type: 'USER_JOIN', username: 'Ben' }));
+      await new Promise((r) => setTimeout(r, 80));
+
+      const benGets = collectMessages(ben, 4, 800);
+      ana.terminate();
+      const msgs = await benGets;
+      expect(msgs).toContainEqual({ type: 'TYPING', username: 'Ana', typing: false });
+
+      await closeAll(ben);
+    });
+  });
+
+  describe('CHAT_MESSAGE hardening', () => {
+    test('uses the joined name, keeps movieTime, and trims text', async () => {
+      const ana = await wsConnect(server);
+      ana.send(JSON.stringify({ type: 'USER_JOIN', username: 'Ana' }));
+      await new Promise((r) => setTimeout(r, 60));
+
+      const p = collectMessages(ana, 1, 500);
+      ana.send(
+        JSON.stringify({ type: 'CHAT_MESSAGE', username: 'Mallory', text: '  hi  ', timestamp: 5, movieTime: 2832.4 })
+      );
+      expect(await p).toEqual([
+        { type: 'CHAT_MESSAGE', username: 'Ana', text: 'hi', timestamp: 5, movieTime: 2832.4 }
+      ]);
+
+      await closeAll(ana);
+    });
+
+    test('drops empty messages', async () => {
+      const ana = await wsConnect(server);
+      ana.send(JSON.stringify({ type: 'USER_JOIN', username: 'Ana' }));
+      await new Promise((r) => setTimeout(r, 60));
+
+      const p = collectMessages(ana, 1, 250);
+      ana.send(JSON.stringify({ type: 'CHAT_MESSAGE', text: '   ' }));
+      expect(await p).toEqual([]);
+
+      await closeAll(ana);
     });
   });
 });

@@ -20,27 +20,56 @@ body {
 }
 
 .watch {
+  --chat-w: 360px;
+  --chat-gap: 12px;
   position: relative;
   height: 100dvh;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  overflow: hidden;
   background: #000;
 }
-.watch.has-sidebar {
-  grid-template-columns: minmax(0, 1fr) 344px;
+
+/* --------------------------------------------------------------------------
+   Ambient glow: the movie's colours, blurred, behind everything
+   -------------------------------------------------------------------------- */
+.glow {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 1.2s var(--ease);
+}
+.glow.is-on {
+  opacity: 1;
+}
+.glow-canvas {
+  position: absolute;
+  inset: -12%;
+  width: 124%;
+  height: 124%;
+  filter: blur(70px) saturate(1.6);
+  opacity: 0.5;
+}
+.glow-vignette {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse 75% 70% at 50% 50%, transparent 35%, rgba(0, 0, 0, 0.7) 100%);
 }
 
 /* --------------------------------------------------------------------------
    Stage
    -------------------------------------------------------------------------- */
 .stage {
-  position: relative;
-  min-width: 0;
-  min-height: 0;
+  position: absolute;
+  inset: 0;
+  z-index: 1;
   overflow: hidden;
-  background: #000;
   user-select: none;
   -webkit-user-select: none;
+  transition: right 0.42s var(--ease);
+}
+.watch.has-chat .stage {
+  right: calc(var(--chat-w) + var(--chat-gap) * 2);
 }
 .watch.is-idle .stage {
   cursor: none;
@@ -51,7 +80,7 @@ body {
   width: 100%;
   height: 100%;
   object-fit: contain;
-  background: #000;
+  background: transparent;
 }
 .captions {
   position: absolute;
@@ -133,6 +162,27 @@ body {
 .topbar .logo {
   text-shadow: 0 1px 8px rgba(0, 0, 0, 0.5);
 }
+.topbar-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.topbar-divider {
+  width: 1px;
+  height: 16px;
+  background: rgba(255, 255, 255, 0.2);
+  flex-shrink: 0;
+}
+.topbar-movie {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 14px;
+  font-weight: 500;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.5);
+}
 .topbar-actions {
   display: flex;
   align-items: center;
@@ -142,6 +192,8 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  white-space: nowrap;
+  flex-shrink: 0;
   height: 32px;
   padding: 0 12px;
   border-radius: var(--radius-pill);
@@ -697,9 +749,41 @@ body {
   min-height: 0;
   background: var(--bg-elevated);
 }
-.chat-docked {
-  height: 100dvh;
-  border-left: 1px solid var(--border);
+.chat-shell-theatre {
+  position: absolute;
+  top: var(--chat-gap);
+  right: var(--chat-gap);
+  bottom: var(--chat-gap);
+  z-index: 6;
+  width: var(--chat-w);
+}
+.chat-shell-floating {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  pointer-events: none;
+}
+.chat-shell-floating .chat {
+  pointer-events: auto;
+}
+.chat-theatre {
+  height: 100%;
+  border-radius: 16px;
+  background: rgba(16, 16, 16, 0.62);
+  backdrop-filter: blur(28px) saturate(1.4);
+  -webkit-backdrop-filter: blur(28px) saturate(1.4);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 24px 60px -20px rgba(0, 0, 0, 0.7);
+  overflow: hidden;
+}
+.chat-theatre .composer,
+.chat-theatre .chat-header {
+  border-color: rgba(255, 255, 255, 0.07);
+}
+.chat-theatre .composer-input {
+  background: rgba(0, 0, 0, 0.35);
+  border-color: rgba(255, 255, 255, 0.1);
 }
 .chat-floating {
   position: absolute;
@@ -802,6 +886,14 @@ body {
   flex-shrink: 0;
   color: var(--text-faint);
   font-size: 11px;
+}
+.msg-movietime {
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-dim);
+  font-size: 10.5px;
+  cursor: default;
 }
 .msg-body {
   padding-left: 28px;
@@ -1010,21 +1102,44 @@ body {
    Small screens: video on top, chat underneath
    -------------------------------------------------------------------------- */
 @media (max-width: 860px) {
-  .watch,
-  .watch.has-sidebar {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
+  .watch {
+    display: flex;
+    flex-direction: column;
   }
-  .watch:not(.has-sidebar):not(.is-fullscreen) {
-    grid-template-rows: minmax(0, 1fr);
+  .glow {
+    display: none;
   }
-  .watch.has-sidebar .stage {
+  .stage,
+  .watch.has-chat .stage {
+    position: relative;
+    inset: auto;
+    flex: 1;
+    min-height: 0;
+    background: #000;
+  }
+  .watch.has-chat .stage {
+    flex: none;
     aspect-ratio: 16 / 9;
     max-height: 56dvh;
   }
-  .chat-docked {
-    height: auto;
-    border-left: 0;
+  .watch.is-fullscreen .stage {
+    flex: 1;
+    aspect-ratio: auto;
+    max-height: none;
+  }
+  .chat-shell-theatre {
+    position: relative;
+    inset: auto;
+    flex: 1;
+    min-height: 0;
+    width: auto;
+  }
+  .chat-theatre {
+    border-radius: 0;
+    background: var(--bg-elevated);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    box-shadow: none;
     border-top: 1px solid var(--border);
   }
   .topbar {
@@ -1032,6 +1147,9 @@ body {
   }
   .topbar .logo-word {
     display: none;
+  }
+  .topbar-movie {
+    font-size: 13px;
   }
   .controls {
     padding: 0 8px 4px;
@@ -1058,6 +1176,34 @@ body {
   .watch.is-idle .captions {
     bottom: 16px;
   }
+  /* Small player: just the "Paused by …" line, not the big title card. */
+  .pause-screen {
+    background: linear-gradient(to bottom, rgba(0, 0, 0, 0.55), transparent 45%);
+  }
+  .pause-info {
+    left: 12px;
+    top: 52px;
+  }
+  .pause-who {
+    margin: 0;
+    padding: 4px 10px 4px 4px;
+    border-radius: var(--radius-pill);
+    background: rgba(10, 10, 10, 0.6);
+    backdrop-filter: blur(10px);
+    font-size: 12px;
+  }
+  .pause-title,
+  .pause-meta {
+    display: none;
+  }
+  .watch.is-paused-screen .topbar-divider,
+  .watch.is-paused-screen .topbar-movie {
+    opacity: 1;
+  }
+  .toasts {
+    top: 52px;
+    right: 12px;
+  }
 }
 
 @media (max-width: 420px) {
@@ -1066,4 +1212,153 @@ body {
   .ctrl[aria-label='Change movie'] {
     display: none;
   }
+}
+
+/* --------------------------------------------------------------------------
+   Who-did-what toasts
+   -------------------------------------------------------------------------- */
+.toasts {
+  position: absolute;
+  top: 64px;
+  right: 20px;
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  pointer-events: none;
+}
+.toast {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 14px 0 8px;
+  border-radius: var(--radius-pill);
+  background: rgba(12, 12, 12, 0.72);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.09),
+    0 8px 24px rgba(0, 0, 0, 0.35);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.toast:not(:has(.avatar)) {
+  padding-left: 14px;
+}
+
+/* --------------------------------------------------------------------------
+   Pause screen
+   -------------------------------------------------------------------------- */
+.pause-screen {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background:
+    linear-gradient(to bottom, rgba(0, 0, 0, 0.72) 0%, rgba(0, 0, 0, 0.25) 38%, transparent 60%),
+    linear-gradient(to right, rgba(0, 0, 0, 0.5), transparent 55%);
+}
+.pause-info {
+  position: absolute;
+  top: 84px;
+  left: 32px;
+  max-width: min(640px, 70%);
+}
+.pause-who {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 13px;
+  font-weight: 500;
+}
+.pause-title {
+  margin: 0;
+  color: #fff;
+  font-size: clamp(28px, 3.4vw, 44px);
+  font-weight: 600;
+  letter-spacing: -0.035em;
+  line-height: 1.08;
+  text-wrap: balance;
+  text-shadow: 0 2px 24px rgba(0, 0, 0, 0.4);
+}
+.pause-meta {
+  margin-top: 10px;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 13px;
+}
+.pause-sep {
+  color: rgba(255, 255, 255, 0.45);
+}
+.pause-left {
+  font-family: var(--font-sans);
+  color: rgba(255, 255, 255, 0.55);
+}
+/* The topbar title would repeat the big pause title. */
+.watch.is-paused-screen .topbar-divider,
+.watch.is-paused-screen .topbar-movie {
+  opacity: 0;
+  transition: opacity 0.3s var(--ease);
+}
+
+/* --------------------------------------------------------------------------
+   Typing indicator
+   -------------------------------------------------------------------------- */
+.typing {
+  flex-shrink: 0;
+  height: 22px;
+  padding: 0 16px;
+  overflow: hidden;
+}
+.typing-inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+.typing-dots {
+  display: inline-flex;
+  gap: 3px;
+}
+.typing-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: typing-bounce 1.2s infinite ease-in-out;
+}
+.typing-dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.typing-dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes typing-bounce {
+  0%,
+  60%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+.typing-ambient {
+  height: auto;
+  padding: 0;
+}
+.typing-ambient .typing-inner {
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  background: rgba(10, 10, 10, 0.5);
+  backdrop-filter: blur(10px);
+  color: var(--text-dim);
 }

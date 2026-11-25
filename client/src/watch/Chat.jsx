@@ -1,25 +1,17 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { ArrowDown, ChevronDown, ChevronUp, GripHorizontal, SendHorizontal, X } from 'lucide-react';
-import { initials, userColor } from '../shared/lib/format';
+import { formatTime, userColor } from '../shared/lib/format';
+import Avatar from './Avatar';
+import { TypingLine } from './Presence';
+
+export { Avatar };
 
 export const REACTIONS = ['🔥', '😂', '😮', '❤️', '🍿'];
 export const MAX_CHAT_LENGTH = 200;
 
 function timeOf(ts) {
   return new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-}
-
-export function Avatar({ name, size = 22 }) {
-  return (
-    <span
-      className="avatar"
-      style={{ width: size, height: size, '--user-color': userColor(name), fontSize: Math.round(size * 0.42) }}
-      aria-hidden="true"
-    >
-      {initials(name)}
-    </span>
-  );
 }
 
 export function MessageItem({ message, me }) {
@@ -36,7 +28,13 @@ export function MessageItem({ message, me }) {
             {message.username}
             {own && <span className="msg-you"> (you)</span>}
           </span>
-          <time className="msg-time">{timeOf(message.timestamp)}</time>
+          {Number.isFinite(message.movieTime) ? (
+            <time className="msg-time msg-movietime mono" title={`Sent at ${timeOf(message.timestamp)}, ${formatTime(message.movieTime)} into the movie`}>
+              {formatTime(message.movieTime)}
+            </time>
+          ) : (
+            <time className="msg-time">{timeOf(message.timestamp)}</time>
+          )}
         </div>
       )}
       <div className="msg-body">{message.text}</div>
@@ -111,12 +109,15 @@ function MessageList({ messages, me }) {
   );
 }
 
-export function Composer({ onSend, onReact, inputRef, placeholder = 'Message the room', autoFocus }) {
+export function Composer({ onSend, onReact, onTyping, inputRef, placeholder = 'Message the room', autoFocus }) {
   const [text, setText] = useState('');
   const send = () => {
     const t = text.trim();
     if (!t) return;
-    if (onSend(t)) setText('');
+    if (onSend(t)) {
+      setText('');
+      onTyping?.(false);
+    }
   };
   return (
     <div className="composer">
@@ -140,7 +141,11 @@ export function Composer({ onSend, onReact, inputRef, placeholder = 'Message the
           type="text"
           value={text}
           maxLength={MAX_CHAT_LENGTH}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value);
+            onTyping?.(e.target.value.trim().length > 0);
+          }}
+          onBlur={() => onTyping?.(false)}
           onKeyDown={(e) => e.stopPropagation()}
           placeholder={placeholder}
           autoComplete="off"
@@ -156,10 +161,11 @@ export function Composer({ onSend, onReact, inputRef, placeholder = 'Message the
 }
 
 /**
- * The chat panel. Docked as a sidebar normally; in fullscreen "panel" mode it
- * floats, can be dragged by its handle, and tucks itself away after 8s idle.
+ * The chat panel. Normally a glass panel that slides over the right of the
+ * room ("theatre"); in fullscreen "panel" mode it floats, can be dragged by its
+ * handle, and tucks itself away after 8s idle.
  */
-export function ChatPanel({ variant, messages, me, count, onSend, onReact, onClose, inputRef, onActivity }) {
+export function ChatPanel({ variant, messages, me, count, typing, onSend, onReact, onTyping, onClose, inputRef, onActivity }) {
   const floating = variant === 'floating';
   const panelRef = useRef(null);
   const [pos, setPos] = useState(null);
@@ -252,7 +258,8 @@ export function ChatPanel({ variant, messages, me, count, onSend, onReact, onClo
       {!minimized && (
         <>
           <MessageList messages={messages} me={me} />
-          <Composer onSend={onSend} onReact={onReact} inputRef={inputRef} />
+          <TypingLine text={typing} />
+          <Composer onSend={onSend} onReact={onReact} onTyping={onTyping} inputRef={inputRef} />
         </>
       )}
     </aside>

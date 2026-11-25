@@ -9,11 +9,17 @@ import { api } from '../shared/lib/api';
 import { readStorage, writeStorage } from '../shared/lib/storage';
 import Controls from './Controls';
 import AmbientLayer from './Ambient';
-import { Avatar, ChatModeMenu, ChatPanel } from './Chat';
+import { ChatModeMenu, ChatPanel } from './Chat';
+import Avatar from './Avatar';
 import { useFullscreen } from './hooks/useFullscreen';
 import { useIdle } from './hooks/useIdle';
 import { usePlayback } from './hooks/useVideo';
 import { appendMessage, chatModeOrDefault } from './messages';
+import AmbientGlow from './AmbientGlow';
+import { PauseScreen, ToastStack } from './Presence';
+import { actionText, pushToast, typingText } from './presence';
+
+const TYPING_TTL = 5000;
 
 /** WebVTT cue text can contain tags like <i> or <c.yellow>; show plain text. */
 function cueToText(text) {
@@ -54,6 +60,11 @@ export default function WatchApp() {
   const [captions, setCaptions] = useState({ available: false, on: false });
   const [scrubbing, setScrubbing] = useState(false);
   const [participantsOpen, setParticipantsOpen] = useState(false);
+  const [movieTitle, setMovieTitle] = useState(null);
+  const [toasts, setToasts] = useState([]);
+  const [actor, setActor] = useState(null); // last play/pause: { action, by } (by null = you)
+  const [typingUsers, setTypingUsers] = useState({}); // name → expiry
+  const chatVisibleRef = useRef(true);
 
   const [isFullscreen, toggleFullscreen] = useFullscreen(appRef, videoRef);
   const { paused, waiting } = usePlayback(videoRef);
@@ -87,15 +98,38 @@ export default function WatchApp() {
           } else if (action === 'PAUSE' && !v.paused) {
             v.pause();
           }
+          const { by, initial } = data.payload || {};
+          if (action === 'PLAY' || action === 'PAUSE') setActor({ action, by: by || null, remote: true });
+          // Catch-up state on join isn't news; anything else is someone acting now.
+          if (!initial) {
+            const text = actionText({ action, by, currentTime });
+            if (text) toast({ key: `${by}:${action === 'SEEK' ? 'seek' : 'playback'}`, by, text });
+          }
           break;
         }
         case 'CHAT_MESSAGE':
           setMessages((list) =>
-            appendMessage(list, { kind: 'chat', username: data.username, text: data.text, timestamp: data.timestamp || Date.now() })
+            appendMessage(list, {
+              kind: 'chat',
+              username: data.username,
+              text: data.text,
+              timestamp: data.timestamp || Date.now(),
+              movieTime: Number.isFinite(data.movieTime) ? data.movieTime : null
+            })
           );
+          setTypingUsers(({ [data.username]: _, ...rest }) => rest);
           break;
         case 'SYSTEM_MESSAGE':
           setMessages((list) => appendMessage(list, { kind: 'system', text: data.text, timestamp: Date.now() }));
+          // With the chat panel closed, joins and leaves would go unnoticed.
+          if (!chatVisibleRef.current) toast({ key: `sys:${data.text}`, text: data.text });
+          break;
+        case 'TYPING':
+          if (!data.username || data.username === username) break;
+          setTypingUsers((current) => {
+            const { [data.username]: _, ...rest } = current;
+            return data.typing ? { ...rest, [data.username]: Date.now() + TYPING_TTL } : rest;
+          });
           break;
         case 'USER_COUNT':
           setCount(data.count);
@@ -118,6 +152,37 @@ export default function WatchApp() {
     }
   });
 
+  function toast({ key, by, text }) {
+    const id = Math.random().toString(36).slice(2);
+    setToasts((list) => pushToast(list, { id, key, by, text }));
+  }
+
+  // Toasts fade after 3.2s (a merged toast restarts its clock).
+  useEffect(() => {
+    if (toasts.length === 0) return undefined;
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      setToasts((list) => {
+        const next = list.filter((t) => now - t.at < 3200);
+        return next.length === list.length ? list : next;
+      });
+    }, 400);
+    return () => window.clearInterval(timer);
+  }, [toasts.length]);
+
+  // Typing entries expire if we never hear "stopped".
+  useEffect(() => {
+    if (Object.keys(typingUsers).length === 0) return undefined;
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      setTypingUsers((current) => {
+        const next = Object.fromEntries(Object.entries(current).filter(([, until]) => until > now));
+        return Object.keys(next).length === Object.keys(current).length ? current : next;
+      });
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [typingUsers]);
+
   const broadcast = useCallback(
     (action) => {
       const v = videoRef.current;
@@ -133,9 +198,13 @@ export default function WatchApp() {
     if (!v) return undefined;
     const onPlay = () => {
       setAutoplayBlocked(false);
+      if (!isRemote()) setActor({ action: 'PLAY', by: null });
       broadcast('PLAY');
     };
-    const onPause = () => broadcast('PAUSE');
+    const onPause = () => {
+      if (!isRemote()) setActor({ action: 'PAUSE', by: null });
+      broadcast('PAUSE');
+    };
     v.addEventListener('play', onPlay);
     v.addEventListener('pause', onPause);
     return () => {
@@ -193,9 +262,39 @@ export default function WatchApp() {
   }, []);
 
   // ---------------------------------------------------------------- chat
+  const typingState = useRef({ on: false, sentAt: 0, timer: 0 });
+  const sendTyping = useCallback(
+    (isTyping) => {
+      const t = typingState.current;
+      window.clearTimeout(t.timer);
+      if (isTyping) {
+        // Re-announce every 3s while typing; go quiet after 4s without a keystroke.
+        if (!t.on || Date.now() - t.sentAt > 3000) {
+          send({ type: 'TYPING', typing: true });
+          t.on = true;
+          t.sentAt = Date.now();
+        }
+        t.timer = window.setTimeout(() => sendTyping(false), 4000);
+      } else if (t.on) {
+        send({ type: 'TYPING', typing: false });
+        t.on = false;
+      }
+    },
+    [send]
+  );
+
   const sendChat = useCallback(
-    (text) => send({ type: 'CHAT_MESSAGE', text, username, timestamp: Date.now() }),
-    [send, username]
+    (text) => {
+      sendTyping(false);
+      return send({
+        type: 'CHAT_MESSAGE',
+        text,
+        username,
+        timestamp: Date.now(),
+        movieTime: videoRef.current ? videoRef.current.currentTime : null
+      });
+    },
+    [send, sendTyping, username]
   );
 
   const sendReaction = useCallback((emoji) => send({ type: 'REACTION', emoji }), [send]);
@@ -224,6 +323,10 @@ export default function WatchApp() {
   }, [isFullscreen]);
 
   const chatVisible = isFullscreen ? chatMode !== 'off' : chatOpen;
+  chatVisibleRef.current = chatVisible;
+  // Ambient bubbles: fullscreen ambient mode, or the room with the chat panel closed.
+  const showAmbient = isFullscreen ? chatMode === 'ambient' : !chatOpen;
+  const typingLabel = typingText(Object.keys(typingUsers));
 
   // Unread dot: someone else spoke while chat wasn't on screen.
   const lastMsgId = useRef(0);
@@ -238,11 +341,34 @@ export default function WatchApp() {
   }, [chatVisible]);
 
   useEffect(() => {
-    if (!isFullscreen) {
-      setReplyOpen(false);
-      setModeMenuOpen(false);
+    setReplyOpen(false);
+    if (!isFullscreen) setModeMenuOpen(false);
+  }, [isFullscreen, chatOpen]);
+
+  // ---------------------------------------------------------------- movie title
+  useEffect(() => {
+    api('/api/movie')
+      .then(({ title }) => {
+        if (!title) return;
+        setMovieTitle(title);
+        document.title = `${title} · CineSync`;
+      })
+      .catch(() => {});
+  }, []);
+
+  // Pause screen appears after a beat, so quick pauses don't flash it.
+  const [pauseScreen, setPauseScreen] = useState(false);
+  const wantPauseScreen = Boolean(username) && paused && !autoplayBlocked && !scrubbing && !mediaChanging;
+  useEffect(() => {
+    if (!wantPauseScreen) {
+      setPauseScreen(false);
+      return undefined;
     }
-  }, [isFullscreen]);
+    const timer = window.setTimeout(() => {
+      if ((videoRef.current?.duration || 0) > 0) setPauseScreen(true);
+    }, 900);
+    return () => window.clearTimeout(timer);
+  }, [wantPauseScreen]);
 
   // ---------------------------------------------------------------- video element setup
   useEffect(() => {
@@ -290,7 +416,7 @@ export default function WatchApp() {
       if (document.querySelector('.dialog-backdrop')) return;
       if (isTypingTarget(document.activeElement)) return;
 
-      if (e.key === 'Enter' && isFullscreen && chatMode === 'ambient' && !replyOpen && !e.repeat) {
+      if (e.key === 'Enter' && showAmbient && !replyOpen && !e.repeat) {
         e.preventDefault();
         document.activeElement?.blur?.();
         setReplyOpen(true);
@@ -319,7 +445,7 @@ export default function WatchApp() {
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [username, isFullscreen, chatMode, replyOpen, togglePlay, skip, toggleMute, toggleCaptions, toggleFullscreen, toggleChat, poke]);
+  }, [username, showAmbient, replyOpen, togglePlay, skip, toggleMute, toggleCaptions, toggleFullscreen, toggleChat, poke]);
 
   // ---------------------------------------------------------------- change movie
   const changeMovie = async () => {
@@ -335,15 +461,17 @@ export default function WatchApp() {
   const openReply = useCallback(() => setReplyOpen(true), []);
 
   const showFloatingPanel = isFullscreen && chatMode === 'panel';
-  const showSidebar = !isFullscreen && chatOpen;
+  const showTheatreChat = !isFullscreen && chatOpen;
 
   return (
     <div
       ref={appRef}
-      className={`watch${isFullscreen ? ' is-fullscreen' : ''}${showSidebar ? ' has-sidebar' : ''}${controlsVisible ? '' : ' is-idle'}`}
+      className={`watch${isFullscreen ? ' is-fullscreen' : ''}${showTheatreChat ? ' has-chat' : ''}${controlsVisible ? '' : ' is-idle'}${pauseScreen ? ' is-paused-screen' : ''}`}
       onPointerMove={poke}
       onPointerDown={poke}
     >
+      <AmbientGlow videoRef={videoRef} enabled={!isFullscreen} />
+
       <div
         className="stage"
         onPointerDown={(e) => {
@@ -379,8 +507,20 @@ export default function WatchApp() {
           </div>
         )}
 
+        <PauseScreen show={pauseScreen} videoRef={videoRef} title={movieTitle} actor={actor} me={username} />
+
         <header className="topbar" onClick={(e) => e.stopPropagation()}>
-          <Logo size={20} />
+          <div className="topbar-title">
+            <Logo size={20} />
+            {movieTitle && (
+              <>
+                <span className="topbar-divider" aria-hidden="true" />
+                <span className="topbar-movie" title={movieTitle}>
+                  {movieTitle}
+                </span>
+              </>
+            )}
+          </div>
           <div className="topbar-actions">
             <Participants
               users={users}
@@ -392,6 +532,8 @@ export default function WatchApp() {
             <InviteButton />
           </div>
         </header>
+
+        <ToastStack toasts={toasts} />
 
         <AnimatePresence>
           {flash && (
@@ -419,13 +561,15 @@ export default function WatchApp() {
           ))}
         </div>
 
-        {isFullscreen && chatMode === 'ambient' && (
+        {showAmbient && (
           <AmbientLayer
             messages={messages}
             replyOpen={replyOpen}
             onCloseReply={closeReply}
             onOpenReply={openReply}
             onSend={sendChat}
+            typing={typingLabel}
+            onTyping={sendTyping}
           />
         )}
 
@@ -473,19 +617,31 @@ export default function WatchApp() {
         />
       </div>
 
-      {(showSidebar || showFloatingPanel) && (
-        <ChatPanel
-          key={showFloatingPanel ? 'floating' : 'docked'}
-          variant={showFloatingPanel ? 'floating' : 'docked'}
-          messages={messages}
-          me={username}
-          count={count}
-          onSend={sendChat}
-          onReact={sendReaction}
-          inputRef={chatInputRef}
-          onClose={() => (isFullscreen ? setChatMode('off') : toggleChat())}
-        />
-      )}
+      <AnimatePresence>
+        {(showTheatreChat || showFloatingPanel) && (
+          <motion.div
+            key={showFloatingPanel ? 'floating' : 'theatre'}
+            className={`chat-shell chat-shell-${showFloatingPanel ? 'floating' : 'theatre'}`}
+            initial={{ opacity: 0, x: showFloatingPanel ? 0 : 28, scale: showFloatingPanel ? 0.97 : 1 }}
+            animate={{ opacity: 1, x: 0, scale: 1 }}
+            exit={{ opacity: 0, x: showFloatingPanel ? 0 : 28, transition: { duration: 0.2 } }}
+            transition={{ duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
+          >
+            <ChatPanel
+              variant={showFloatingPanel ? 'floating' : 'theatre'}
+              messages={messages}
+              me={username}
+              count={count}
+              typing={typingLabel}
+              onSend={sendChat}
+              onReact={sendReaction}
+              onTyping={sendTyping}
+              inputRef={chatInputRef}
+              onClose={() => (isFullscreen ? setChatMode('off') : toggleChat())}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {!username && <JoinScreen onJoin={setUsername} />}
 

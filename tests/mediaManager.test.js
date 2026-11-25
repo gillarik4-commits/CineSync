@@ -354,6 +354,36 @@ describe('mediaManager', () => {
     });
   });
 
+  // ── GET /api/movie ────────────────────────────────────────────────────────
+
+  describe('GET /api/movie', () => {
+    test('returns a null title before any movie is prepared', async () => {
+      const { app } = buildApp();
+      const res = await request(app).get('/api/movie');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ title: null });
+    });
+
+    test('returns the cleaned title once a transcode finishes', async () => {
+      setExists(['/films/The.Matrix.1999.1080p.BluRay.mkv']);
+      let endCb = null;
+      jest.requireMock('fluent-ffmpeg').mockImplementation(() =>
+        makeFfmpegInst((event, cb) => {
+          if (event === 'end') endCb = cb;
+        })
+      );
+      const { app } = buildApp();
+      await request(app)
+        .post('/api/prepare')
+        .send({ filePath: '/films/The.Matrix.1999.1080p.BluRay.mkv', audioIndex: '1', subIndex: 'none' });
+      await new Promise((r) => setTimeout(r, 50));
+      endCb();
+
+      const res = await request(app).get('/api/movie');
+      expect(res.body).toEqual({ title: 'The Matrix (1999)' });
+    });
+  });
+
   // ── GET /video ────────────────────────────────────────────────────────────
 
   describe('GET /video', () => {
