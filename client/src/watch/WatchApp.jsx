@@ -15,6 +15,7 @@ import { useFullscreen } from './hooks/useFullscreen';
 import { useIdle } from './hooks/useIdle';
 import { PHONE_LANDSCAPE, useMediaQuery } from './hooks/useMediaQuery';
 import { useStream } from './hooks/useStream';
+import { useViewportHeight } from './hooks/useViewportHeight';
 import { formatTime } from '../shared/lib/format';
 import { usePlayback } from './hooks/useVideo';
 import { appendMessage, chatModeOrDefault } from './messages';
@@ -103,7 +104,9 @@ export default function WatchApp() {
   const chatVisibleRef = useRef(true);
   const showAmbientRef = useRef(false);
 
-  const [isFullscreen, toggleFullscreen] = useFullscreen(appRef, videoRef);
+  const [isFullscreen, toggleFullscreen, isPseudoFullscreen] = useFullscreen(appRef);
+  const isTouch = useMediaQuery('(pointer: coarse)');
+  useViewportHeight();
 
   // Phone turned sideways: give the movie the whole screen (chat becomes bubbles).
   // Turning back restores the saved preference.
@@ -647,7 +650,7 @@ export default function WatchApp() {
   return (
     <div
       ref={appRef}
-      className={`watch${isFullscreen ? ' is-fullscreen' : ''}${showTheatreChat ? ' has-chat' : ''}${controlsVisible ? '' : ' is-idle'}${pauseScreen ? ' is-paused-screen' : ''}`}
+      className={`watch${isFullscreen ? ' is-fullscreen' : ''}${isPseudoFullscreen ? ' is-pseudo-fullscreen' : ''}${isTouch ? ' is-touch' : ''}${showTheatreChat ? ' has-chat' : ''}${controlsVisible ? '' : ' is-idle'}${pauseScreen ? ' is-paused-screen' : ''}`}
       onPointerMove={poke}
       onPointerDown={poke}
     >
@@ -758,6 +761,9 @@ export default function WatchApp() {
             onSend={sendChat}
             typing={typingLabel}
             onTyping={sendTyping}
+            onReact={sendReaction}
+            canReact={can.reactions}
+            isTouch={isTouch}
           />
         )}
 

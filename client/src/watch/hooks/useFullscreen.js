@@ -1,28 +1,46 @@
 import { useCallback, useEffect, useState } from 'react';
 
-/** Tracks document fullscreen and toggles it for `targetRef` (falls back to native video fullscreen on iOS). */
-export function useFullscreen(targetRef, videoRef) {
-  const [isFullscreen, setIsFullscreen] = useState(() => Boolean(document.fullscreenElement));
+/**
+ * Fullscreen for the whole room (video + chat).
+ * Browsers with the Fullscreen API use it. iPhone Safari can only fullscreen a
+ * bare <video> in Apple's own player (no chat, no overlays), so there we use a
+ * "pseudo" fullscreen instead: the room fills the screen with CSS.
+ * Returns [isFullscreen, toggle, isPseudo].
+ */
+export function useFullscreen(targetRef) {
+  const [native, setNative] = useState(() => Boolean(document.fullscreenElement));
+  const [pseudo, setPseudo] = useState(false);
 
   useEffect(() => {
-    const onChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    const onChange = () => setNative(Boolean(document.fullscreenElement));
     document.addEventListener('fullscreenchange', onChange);
     return () => document.removeEventListener('fullscreenchange', onChange);
   }, []);
+
+  useEffect(() => {
+    if (!pseudo) return undefined;
+    const onKey = (e) => e.key === 'Escape' && setPseudo(false);
+    document.addEventListener('keydown', onKey);
+    window.scrollTo(0, 0);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [pseudo]);
 
   const toggle = useCallback(() => {
     if (document.fullscreenElement) {
       document.exitFullscreen().catch(() => {});
       return;
     }
+    if (pseudo) {
+      setPseudo(false);
+      return;
+    }
     const el = targetRef.current;
     if (el?.requestFullscreen && document.fullscreenEnabled) {
-      el.requestFullscreen().catch(() => {});
+      el.requestFullscreen().catch(() => setPseudo(true));
     } else {
-      // iPhone Safari can only fullscreen the <video> itself.
-      videoRef?.current?.webkitEnterFullscreen?.();
+      setPseudo(true);
     }
-  }, [targetRef, videoRef]);
+  }, [targetRef, pseudo]);
 
-  return [isFullscreen, toggle];
+  return [native || pseudo, toggle, pseudo];
 }

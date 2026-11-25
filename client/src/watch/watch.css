@@ -23,7 +23,7 @@ body {
   --chat-w: 360px;
   --chat-gap: 12px;
   position: relative;
-  height: 100dvh;
+  height: var(--app-h, 100dvh);
   overflow: hidden;
   background: #000;
 }
@@ -43,12 +43,17 @@ body {
   opacity: 1;
 }
 .glow-canvas {
+  /* Blur a quarter-size layer, then scale it up: same look as blurring the
+     full-screen layer, at a fraction of the GPU cost. */
   position: absolute;
-  inset: -12%;
-  width: 124%;
-  height: 124%;
-  filter: blur(70px) saturate(1.6);
+  left: 37.5%;
+  top: 37.5%;
+  width: 25%;
+  height: 25%;
+  filter: blur(16px) saturate(1.6);
+  transform: scale(5);
   opacity: 0.5;
+  will-change: transform;
 }
 .glow-vignette {
   position: absolute;
@@ -1551,5 +1556,126 @@ body {
 @media (max-width: 420px) {
   .preparing-label {
     display: none;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Touch screens: chat without a keyboard shortcut
+   -------------------------------------------------------------------------- */
+.watch.is-pseudo-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  height: var(--app-h, 100dvh);
+}
+.ambient-reply-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  pointer-events: auto;
+}
+.ambient-reactions {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--radius-pill);
+  background: rgba(10, 10, 10, 0.62);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+.ambient-reaction {
+  width: 38px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  font-size: 19px;
+  line-height: 1;
+  transition: transform var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.ambient-reaction:active {
+  transform: scale(0.88);
+  background: rgba(255, 255, 255, 0.1);
+}
+.ambient-send,
+.ambient-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  margin-right: -6px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+}
+.ambient-send {
+  background: var(--primary);
+  color: var(--text-inverse);
+}
+.ambient-send:disabled {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-faint);
+}
+.ambient-close {
+  margin-left: 2px;
+  background: transparent;
+  color: var(--text-dim);
+}
+.ambient-message-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 16px 0 14px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: var(--radius-pill);
+  background: rgba(10, 10, 10, 0.6);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 500;
+  pointer-events: auto;
+  transition: opacity 0.3s var(--ease);
+}
+.watch.is-idle .ambient-message-btn {
+  opacity: 0;
+  pointer-events: none;
+}
+.watch.is-touch .ambient-reply {
+  height: 46px;
+  padding-right: 10px;
+}
+
+/* Phones: the floating chat style becomes a side sheet (landscape) or a bottom sheet (portrait) */
+@media (orientation: landscape) and (max-height: 500px) {
+  .chat-shell-floating .chat-floating {
+    top: max(8px, env(safe-area-inset-top));
+    right: max(8px, env(safe-area-inset-right));
+    bottom: 8px;
+    left: auto !important;
+    width: min(300px, 46vw);
+    height: auto;
+  }
+  .ambient-reply {
+    width: min(360px, 52vw);
+  }
+}
+@media (max-width: 600px) and (orientation: portrait) {
+  .chat-shell-floating .chat-floating {
+    left: 8px !important;
+    right: 8px;
+    top: auto !important;
+    bottom: max(8px, env(safe-area-inset-bottom));
+    width: auto;
+    height: min(50%, 420px);
+  }
+  .ambient-reply {
+    width: calc(100vw - 24px);
   }
 }

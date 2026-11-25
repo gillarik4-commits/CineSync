@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { CornerDownLeft } from 'lucide-react';
-import { MAX_CHAT_LENGTH } from './Chat';
+import { CornerDownLeft, MessageSquare, SendHorizontal, X } from 'lucide-react';
+import { MAX_CHAT_LENGTH, REACTIONS } from './Chat';
 import { userColor } from '../shared/lib/format';
 import { TypingLine } from './Presence';
 import { readStorage, writeStorage } from '../shared/lib/storage';
@@ -54,7 +54,19 @@ function Chip({ message, paused, onExpire }) {
  * Fullscreen "ambient" chat: new messages appear as bubbles over the movie and
  * fade away. Enter opens a one-line reply bar.
  */
-export default function AmbientLayer({ messages, replyOpen, onCloseReply, onOpenReply, onSend, typing, onTyping, canChat = true }) {
+export default function AmbientLayer({
+  messages,
+  replyOpen,
+  onCloseReply,
+  onOpenReply,
+  onSend,
+  onReact,
+  typing,
+  onTyping,
+  canChat = true,
+  canReact = true,
+  isTouch = false
+}) {
   const [chips, setChips] = useState([]);
   const lastId = useRef(messages[messages.length - 1]?.id ?? 0);
   const [text, setText] = useState('');
@@ -86,10 +98,11 @@ export default function AmbientLayer({ messages, replyOpen, onCloseReply, onOpen
   useEffect(() => {
     window.clearTimeout(idleTimer.current);
     if (replyOpen && !text.trim()) {
-      idleTimer.current = window.setTimeout(onCloseReply, 10000);
+      // Phones get longer: the keyboard is up and people take their time.
+      idleTimer.current = window.setTimeout(onCloseReply, isTouch ? 30000 : 10000);
     }
     return () => window.clearTimeout(idleTimer.current);
-  }, [replyOpen, text, onCloseReply]);
+  }, [replyOpen, text, onCloseReply, isTouch]);
 
   const submit = () => {
     const t = text.trim();
@@ -99,11 +112,21 @@ export default function AmbientLayer({ messages, replyOpen, onCloseReply, onOpen
         writeStorage(HINT_KEY, 'true');
       }
     }
+    if (isTouch && t) {
+      // Keep the keyboard up for the next message; tapping away closes it.
+      setText('');
+      inputRef.current?.focus();
+      return;
+    }
     onCloseReply();
   };
 
+  // Buttons inside the reply bar must not steal focus (that would close it).
+  const keepFocus = (e) => e.preventDefault();
+
   return (
-    <div className="ambient" aria-live="polite">
+    // Taps on chat must not reach the video underneath (which would pause/play it).
+    <div className="ambient" aria-live="polite" onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
       <div className="ambient-stack">
         <AnimatePresence initial={false}>
           {chips.map((m) => (
@@ -116,13 +139,32 @@ export default function AmbientLayer({ messages, replyOpen, onCloseReply, onOpen
 
       <AnimatePresence mode="wait" initial={false}>
         {replyOpen && canChat ? (
-          <motion.form
+          <motion.div
             key="reply"
-            className="ambient-reply"
+            className="ambient-reply-wrap"
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 4, transition: { duration: 0.1 } }}
             transition={{ duration: 0.18 }}
+          >
+            {canReact && onReact && (
+              <div className="ambient-reactions" role="group" aria-label="Send a reaction">
+                {REACTIONS.map((emoji) => (
+                  <button
+                    key={emoji}
+                    type="button"
+                    className="ambient-reaction"
+                    onPointerDown={keepFocus}
+                    onClick={() => onReact(emoji)}
+                    aria-label={`React ${emoji}`}
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+            )}
+          <form
+            className="ambient-reply"
             onSubmit={(e) => {
               e.preventDefault();
               submit();
@@ -144,18 +186,45 @@ export default function AmbientLayer({ messages, replyOpen, onCloseReply, onOpen
                   onCloseReply();
                 }
               }}
-              onBlur={() => !text.trim() && onCloseReply()}
+              onBlur={() => window.setTimeout(() => !inputRef.current?.value.trim() && document.activeElement !== inputRef.current && onCloseReply(), 150)}
               placeholder="Message"
               aria-label="Reply to the room"
               autoComplete="off"
+              enterKeyHint="send"
             />
             {text.length >= MAX_CHAT_LENGTH - 30 && (
               <span className={`ambient-count mono${text.length >= MAX_CHAT_LENGTH ? ' is-limit' : ''}`}>
                 {text.length}/{MAX_CHAT_LENGTH}
               </span>
             )}
-            <CornerDownLeft size={14} className={`ambient-enter${text ? ' is-ready' : ''}`} aria-hidden="true" />
-          </motion.form>
+            {isTouch ? (
+              <>
+                <button type="submit" className="ambient-send" onPointerDown={keepFocus} disabled={!text.trim()} aria-label="Send">
+                  <SendHorizontal size={16} />
+                </button>
+                <button type="button" className="ambient-close" onClick={onCloseReply} aria-label="Close">
+                  <X size={16} />
+                </button>
+              </>
+            ) : (
+              <CornerDownLeft size={14} className={`ambient-enter${text ? ' is-ready' : ''}`} aria-hidden="true" />
+            )}
+          </form>
+          </motion.div>
+        ) : canChat && isTouch ? (
+          // Phones and tablets have no Enter key to start a reply: a button that's always there.
+          <motion.button
+            key="tap"
+            type="button"
+            className="ambient-message-btn"
+            onClick={onOpenReply}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <MessageSquare size={15} />
+            Message
+          </motion.button>
         ) : (
           !hintDone && canChat && (
             <motion.button

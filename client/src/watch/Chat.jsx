@@ -69,6 +69,17 @@ function MessageList({ messages, me }) {
     if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
   }, []);
 
+  // When the list gets shorter (a phone keyboard opening), keep the newest messages in view.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver(() => {
+      if (atBottom.current) el.scrollTop = el.scrollHeight;
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   const onScroll = () => {
     const el = ref.current;
     atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
@@ -164,6 +175,7 @@ export function Composer({ onSend, onReact, onTyping, inputRef, placeholder = 'M
           placeholder={placeholder}
           autoComplete="off"
           aria-label="Chat message"
+          enterKeyHint="send"
           autoFocus={autoFocus}
         />
         <button type="submit" className="send-btn" disabled={!text.trim()} aria-label="Send">
