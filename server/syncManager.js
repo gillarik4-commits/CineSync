@@ -53,8 +53,14 @@ function init(server) {
           }));
         } 
         else if (data.type === 'SYNC_ACTION') {
-          roomState.currentVideoTime = data.payload.currentTime;
-          roomState.isPlaying = (data.payload.action === 'PLAY');
+          const { action, currentTime } = data.payload || {};
+          if (Number.isFinite(currentTime)) {
+            roomState.currentVideoTime = currentTime;
+          }
+          // Only PLAY/PAUSE change whether the room is playing. A SEEK moves the
+          // position but keeps the current state, so late joiners start correctly.
+          if (action === 'PLAY') roomState.isPlaying = true;
+          else if (action === 'PAUSE') roomState.isPlaying = false;
           roomState.lastUpdated = Date.now();
           
           wss.clients.forEach(client => {

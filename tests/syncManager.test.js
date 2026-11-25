@@ -198,6 +198,62 @@ describe('syncManager', () => {
 
       await closeAll(ws);
     });
+
+    test('a SEEK while playing keeps the room playing (late joiners start playing)', async () => {
+      const ws = await wsConnect(server);
+      await new Promise((r) => setTimeout(r, 30));
+
+      ws.send(JSON.stringify({ type: 'SYNC_ACTION', payload: { currentTime: 10, action: 'PLAY' } }));
+      ws.send(JSON.stringify({ type: 'SYNC_ACTION', payload: { currentTime: 300, action: 'SEEK' } }));
+      await new Promise((r) => setTimeout(r, 150));
+
+      const late = await wsConnect(server);
+      await new Promise((r) => setTimeout(r, 30));
+      const p = nextMessage(late);
+      late.send(JSON.stringify({ type: 'REQUEST_STATE' }));
+      const msg = await p;
+
+      expect(msg.payload.action).toBe('PLAY');
+      expect(msg.payload.currentTime).toBeGreaterThan(300);
+      expect(msg.payload.currentTime).toBeLessThan(301);
+
+      await closeAll(ws, late);
+    });
+
+    test('a SEEK while paused keeps the room paused at the new position', async () => {
+      const ws = await wsConnect(server);
+      await new Promise((r) => setTimeout(r, 30));
+
+      ws.send(JSON.stringify({ type: 'SYNC_ACTION', payload: { currentTime: 10, action: 'PAUSE' } }));
+      ws.send(JSON.stringify({ type: 'SYNC_ACTION', payload: { currentTime: 75, action: 'SEEK' } }));
+      await new Promise((r) => setTimeout(r, 150));
+
+      const p = nextMessage(ws);
+      ws.send(JSON.stringify({ type: 'REQUEST_STATE' }));
+      const msg = await p;
+
+      expect(msg.payload.action).toBe('PAUSE');
+      expect(msg.payload.currentTime).toBe(75);
+
+      await closeAll(ws);
+    });
+
+    test('ignores a sync message without a valid time', async () => {
+      const ws = await wsConnect(server);
+      await new Promise((r) => setTimeout(r, 30));
+
+      ws.send(JSON.stringify({ type: 'SYNC_ACTION', payload: { currentTime: 42, action: 'PAUSE' } }));
+      ws.send(JSON.stringify({ type: 'SYNC_ACTION', payload: { currentTime: 'abc', action: 'SEEK' } }));
+      await new Promise((r) => setTimeout(r, 80));
+
+      const p = nextMessage(ws);
+      ws.send(JSON.stringify({ type: 'REQUEST_STATE' }));
+      const msg = await p;
+
+      expect(msg.payload.currentTime).toBe(42);
+
+      await closeAll(ws);
+    });
   });
 
   // ── SYNC_ACTION fan-out ────────────────────────────────────────────────────
