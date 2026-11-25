@@ -1693,7 +1693,3 @@ input.mono-input:focus {
     -webkit-backdrop-filter: none !important;
   }
 }
-
-.letterbox-backdrop {
-  opacity: 0.5;
-}

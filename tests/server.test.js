@@ -19,7 +19,7 @@
  */
 
 // We mock the heavy dependencies so the server boots without real FFmpeg/Cloudflare.
-jest.mock('../mediaManager', () => {
+jest.mock('../server/mediaManager', () => {
   const express = require('express');
   const router = express.Router();
   // Minimal stub routes
@@ -35,7 +35,7 @@ jest.mock('../mediaManager', () => {
   };
 });
 
-jest.mock('../syncManager', () => {
+jest.mock('../server/syncManager', () => {
   const WebSocket = require('ws');
   let _wss = null;
   let _resetCalled = false;
@@ -113,7 +113,7 @@ function nextMessageOfType(ws, type, timeoutMs = 500) {
  */
 async function closeTestServer(server) {
   if (!server || !server.listening) return;
-  const sm = require('../syncManager');
+  const sm = require('../server/syncManager');
   const wss = sm._getWssInstance();
   if (wss) wss.clients.forEach((c) => c.terminate());
   await new Promise((r) => server.close(r));
@@ -132,8 +132,8 @@ function buildTestApp(partyActive = false) {
   const app = express();
   const server = http.createServer(app);
 
-  const mediaManager = require('../mediaManager');
-  const syncManager = require('../syncManager');
+  const mediaManager = require('../server/mediaManager');
+  const syncManager = require('../server/syncManager');
 
   const appState = {
     shareUrl: null,
@@ -403,7 +403,7 @@ describe('Edge case 2 — Late-Joiners During Transcoding', () => {
     const msgP = nextMessageOfType(ws, 'MEDIA_READY', 600);
 
     // Simulate mediaManager signaling MEDIA_READY (as it does on transcode end)
-    const syncManager = require('../syncManager');
+    const syncManager = require('../server/syncManager');
     const wss = syncManager._getWssInstance();
     wss.clients.forEach((c) => {
       if (c.readyState === WebSocket.OPEN) {

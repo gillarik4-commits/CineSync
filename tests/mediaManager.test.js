@@ -9,7 +9,7 @@
  * jest.resetModules() is called in beforeEach, so each test gets a clean
  * require() of mediaManager with the freshly-configured fs/ffmpeg mocks.
  *
- * IMPORTANT: call setExists() and configure ffmpegFn BEFORE calling require('../mediaManager')
+ * IMPORTANT: call setExists() and configure ffmpegFn BEFORE calling require('../server/mediaManager')
  * inside each test, because resetModules() clears the module registry and re-runs
  * the jest.mock() factory on the next require().
  */
@@ -45,7 +45,7 @@ const SUBTITLE_PATH = path.join(MEDIA_DIR, 'subtitles.vtt');
 
 /**
  * Configure which paths existsSync returns true for.
- * Call this AFTER resetModules() / BEFORE require('../mediaManager').
+ * Call this AFTER resetModules() / BEFORE require('../server/mediaManager').
  */
 function setExists(paths) {
   const fs = jest.requireMock('fs');
@@ -72,7 +72,7 @@ function makeFfmpegInst(onEvent) {
 function buildApp(partyActive = false) {
   // NOTE: do NOT call resetModules() here — caller already did it in beforeEach.
   // Calling it here would undo the setExists() configuration.
-  const mediaManager = require('../mediaManager');
+  const mediaManager = require('../server/mediaManager');
   const appState = { isPartyActive: partyActive };
   mediaManager.setAppState(appState);
 

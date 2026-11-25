@@ -81,7 +81,7 @@ describe('syncManager', () => {
   beforeEach(async () => {
     // Fresh module instance per test to avoid state leakage
     jest.resetModules();
-    syncManager = require('../syncManager');
+    syncManager = require('../server/syncManager');
     server = await makeServer(syncManager);
   });
 

@@ -2,8 +2,8 @@ const express = require('express');
 const http = require('http');
 const path = require('path');
 const { spawn } = require('child_process');
-const mediaManager = require('./mediaManager');
-const syncManager = require('./syncManager');
+const mediaManager = require('./server/mediaManager');
+const syncManager = require('./server/syncManager');
 
 const app = express();
 const server = http.createServer(app);

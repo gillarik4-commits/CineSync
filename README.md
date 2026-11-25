@@ -21,23 +21,17 @@ Ensure you have the following installed on your system before proceeding:
 
 ## Quick Start 🏁
 
-1. **Clone the Repository:**
-   ```bash
-   git clone https://github.com/yourusername/cinesync.git
-   cd cinesync
-   ```
-
-2. **Install Dependencies:**
+1. **Install Dependencies** (from the project folder):
    ```bash
    npm install
    ```
 
-3. **Start the Server:**
+2. **Start the Server:**
    ```bash
    npm start
    ```
 
-4. **Host a Party:**
+3. **Host a Party:**
    - Open your browser to `http://localhost:3000`
    - Paste the absolute file path to your local media.
    - Select your preferred Audio and Subtitle tracks.

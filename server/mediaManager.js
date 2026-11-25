@@ -5,7 +5,7 @@ const ffmpeg = require('fluent-ffmpeg');
 const { getWss } = require('./syncManager');
 
 const router = express.Router();
-const MEDIA_DIR = path.join(__dirname, 'public', 'media');
+const MEDIA_DIR = path.join(__dirname, '..', 'public', 'media');
 const MOVIE_PATH = path.join(MEDIA_DIR, 'movie.mp4');
 const SUBTITLE_PATH = path.join(MEDIA_DIR, 'subtitles.vtt');
 
