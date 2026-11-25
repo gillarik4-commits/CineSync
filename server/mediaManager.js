@@ -13,6 +13,9 @@ const MEDIA_DIR = path.join(__dirname, '..', 'media');
 // Legacy single-file output (movies prepared before streaming); still served.
 const MOVIE_PATH = path.join(MEDIA_DIR, 'movie.mp4');
 const SUBTITLE_PATH = path.join(MEDIA_DIR, 'subtitles.vtt');
+// Subtitles are written here first and renamed when complete, so nobody ever
+// loads a half-written file.
+const SUBTITLE_TMP_PATH = path.join(MEDIA_DIR, 'subtitles.partial.vtt');
 // Streaming output: an HLS playlist plus ~6s chunks, playable while it's written.
 const STREAM_DIR = path.join(MEDIA_DIR, 'stream');
 const PLAYLIST_PATH = path.join(STREAM_DIR, 'index.m3u8');
@@ -43,6 +46,8 @@ let appStateRef = null;
 let movieInfo = loadMovieInfo(MEDIA_DIR);
 // Streaming progress for the current movie.
 let stream = { preparedSeconds: 0, complete: true };
+// 'ready' | 'pending' (still extracting) | 'none'
+let subtitles = fs.existsSync(SUBTITLE_PATH) ? 'ready' : 'none';
 
 // A playlist left without an end marker means preparing was interrupted (e.g. the
 // server restarted). Close it so players treat what exists as the whole movie.
@@ -181,16 +186,35 @@ const handlePrepare = (req, res) => {
   stream = { preparedSeconds: 0, complete: false };
 
   // Subtitles run alongside the movie instead of before it, so they never delay the start.
-  const subtitleJob = (input, options) =>
+  const publishSubtitles = () => {
+    try {
+      fs.renameSync(SUBTITLE_TMP_PATH, SUBTITLE_PATH);
+      subtitles = 'ready';
+      broadcast({ type: 'SUBTITLES_READY' });
+    } catch (err) {
+      console.error('Could not publish subtitles:', err.message);
+      subtitles = 'none';
+    }
+  };
+  const subtitleJob = (input, options) => {
+    subtitles = 'pending';
     ffmpeg(input)
-      .outputOptions(options)
-      .save(SUBTITLE_PATH)
-      .on('end', () => broadcast({ type: 'SUBTITLES_READY' }))
-      .on('error', (err) => console.error('Subtitle extraction failed:', err.message));
+      .outputOptions([...options, '-f webvtt'])
+      .save(SUBTITLE_TMP_PATH)
+      .on('end', publishSubtitles)
+      .on('error', (err) => {
+        console.error('Subtitle extraction failed:', err.message);
+        subtitles = 'none';
+        tryRemove(SUBTITLE_TMP_PATH);
+      });
+  };
 
+  subtitles = 'none';
+  tryRemove(SUBTITLE_TMP_PATH);
   if (cleanExternalSub && path.extname(cleanExternalSub).toLowerCase() === '.vtt') {
     try {
-      fs.copyFileSync(cleanExternalSub, SUBTITLE_PATH);
+      fs.copyFileSync(cleanExternalSub, SUBTITLE_TMP_PATH);
+      publishSubtitles();
     } catch (err) {
       console.error('Error copying external vtt file:', err.message);
     }
@@ -305,7 +329,9 @@ router.get('/api/movie', (req, res) => {
     duration: (movieInfo && movieInfo.duration) || null,
     // How far the movie is ready; while preparing, nobody can jump past this.
     preparedSeconds: stream.complete ? null : stream.preparedSeconds,
-    complete: stream.complete
+    complete: stream.complete,
+    // Whether to load subtitles now, wait for SUBTITLES_READY, or not show the button.
+    subtitles: source ? subtitles : 'none'
   });
 });
 

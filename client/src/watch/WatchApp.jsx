@@ -125,6 +125,16 @@ export default function WatchApp() {
   const controlsVisible = paused || active || scrubbing || modeMenuOpen || participantsOpen || replyOpen;
 
   const [subtitleSrc, setSubtitleSrc] = useState(() => `/media/subtitles.vtt?t=${Date.now()}`);
+  const [subtitlesReady, setSubtitlesReady] = useState(false);
+  const subtitlesReadyRef = useRef(false);
+  // Subtitles can finish a moment after the room opens. Load (or reload) the
+  // track only once they really exist.
+  const markSubtitles = useCallback((state) => {
+    const ready = state === 'ready';
+    if (ready && !subtitlesReadyRef.current) setSubtitleSrc(`/media/subtitles.vtt?t=${Date.now()}`);
+    subtitlesReadyRef.current = ready;
+    setSubtitlesReady(ready);
+  }, []);
 
   // ---------------------------------------------------------------- sync
   const isRemote = () => Date.now() < remoteUntil.current;
@@ -132,6 +142,9 @@ export default function WatchApp() {
   const { send } = useSocket({
     enabled: Boolean(username),
     onOpen: (ws) => {
+      // Catch up on anything announced while we weren't connected (e.g. subtitles
+      // finishing while this person was still typing their name).
+      refreshMovieRef.current?.();
       ws.send(JSON.stringify({ type: 'HELLO' }));
       ws.send(JSON.stringify({ type: 'USER_JOIN', username }));
       ws.send(JSON.stringify({ type: 'REQUEST_STATE' }));
@@ -220,7 +233,8 @@ export default function WatchApp() {
           setPreparedSeconds(null);
           break;
         case 'SUBTITLES_READY':
-          setSubtitleSrc(`/media/subtitles.vtt?t=${Date.now()}`);
+          subtitlesReadyRef.current = false;
+          markSubtitles('ready');
           break;
         case 'PERMISSION_DENIED':
           toast({ key: `deny:${data.capability}`, text: deniedText(data.capability) });
@@ -501,20 +515,27 @@ export default function WatchApp() {
   }, [isFullscreen, chatOpen]);
 
   // ---------------------------------------------------------------- movie title
-  useEffect(() => {
+  const refreshMovieRef = useRef(null);
+  const refreshMovie = useCallback(() => {
     api('/api/movie')
-      .then(({ title, source, duration, preparedSeconds: ready, complete }) => {
+      .then(({ title, source, duration, preparedSeconds: ready, complete, subtitles }) => {
         setMovieSource(source || null);
         setMovieDuration(Number.isFinite(duration) ? duration : null);
         setPreparedSeconds(complete === false && Number.isFinite(ready) ? ready : null);
+        // Older servers don't report subtitles: assume they may exist.
+        markSubtitles(subtitles === undefined ? 'ready' : subtitles);
         if (!source) setNoMovie(true);
         if (title) {
           setMovieTitle(title);
           document.title = `${title} · CineSync`;
         }
       })
-      .catch(() => setMovieSource(null));
-  }, []);
+      .catch(() => setMovieSource((cur) => (cur === undefined ? null : cur)));
+  }, [markSubtitles]);
+  refreshMovieRef.current = refreshMovie;
+  useEffect(() => {
+    refreshMovie();
+  }, [refreshMovie]);
 
   useStream(videoRef, movieSource, () => setNoMovie(true));
 
@@ -568,7 +589,7 @@ export default function WatchApp() {
       el.removeEventListener('error', onError);
       track.removeEventListener('cuechange', onCue);
     };
-  }, [subtitleSrc]);
+  }, [subtitleSrc, subtitlesReady]);
 
   // iPhone fullscreen is Apple's own player, which can't show our overlay. While
   // it's open, let the browser draw the subtitles; hand them back afterwards.
@@ -590,7 +611,7 @@ export default function WatchApp() {
       v.removeEventListener('webkitbeginfullscreen', onBegin);
       v.removeEventListener('webkitendfullscreen', onEnd);
     };
-  }, [subtitleSrc]);
+  }, [subtitleSrc, subtitlesReady]);
 
   // ---------------------------------------------------------------- keyboard
   useEffect(() => {
@@ -676,7 +697,9 @@ export default function WatchApp() {
           crossOrigin="anonymous"
           onLoadedMetadata={() => setNoMovie(false)}
         >
-          <track key={subtitleSrc} ref={trackRef} kind="subtitles" src={subtitleSrc} srcLang="en" label="Subtitles" default />
+          {subtitlesReady && (
+            <track key={subtitleSrc} ref={trackRef} kind="subtitles" src={subtitleSrc} srcLang="en" label="Subtitles" default />
+          )}
         </video>
 
         <div className="stage-shade" aria-hidden="true" />

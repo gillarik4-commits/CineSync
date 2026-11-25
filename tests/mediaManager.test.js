@@ -29,6 +29,7 @@ jest.mock('fs', () => ({
   appendFileSync: jest.fn(),
   copyFileSync: jest.fn(),
   writeFileSync: jest.fn(),
+  renameSync: jest.fn(),
 }));
 
 const mockClients = [];
@@ -571,6 +572,40 @@ describe('mediaManager', () => {
       const { main, options } = await prepare(buildApp().app, { audioIndex: '1' });
       expect(options).toContain('-c:v copy');
       expect(main.inputOptions.mock.calls[0][0]).toEqual([]);
+    });
+
+    test('subtitles are written to a temp file and published only when complete', async () => {
+      setExists(['/valid/movie.mkv']);
+      const { app } = buildApp(true);
+      const instances = [];
+      jest.requireMock('fluent-ffmpeg').mockImplementation(() => {
+        const handlers = {};
+        const inst = makeFfmpegInst((event, cb) => {
+          handlers[event] = cb;
+        });
+        inst.handlers = handlers;
+        instances.push(inst);
+        return inst;
+      });
+      await request(app).post('/api/prepare').send({ filePath: '/valid/movie.mkv', audioIndex: '1', subIndex: '3' });
+      await new Promise((r) => setTimeout(r, 30));
+
+      const subJob = instances.find((i) => i.outputOptions.mock.calls[0][0].includes('-map 0:3'));
+      expect(subJob.save.mock.calls[0][0]).toBe(path.join(MEDIA_DIR, 'subtitles.partial.vtt'));
+      setExists(['/valid/movie.mkv', PLAYLIST_PATH]);
+      expect((await request(app).get('/api/movie')).body.subtitles).toBe('pending');
+
+      subJob.handlers.end();
+      const fs = jest.requireMock('fs');
+      expect(fs.renameSync).toHaveBeenCalledWith(path.join(MEDIA_DIR, 'subtitles.partial.vtt'), path.join(MEDIA_DIR, 'subtitles.vtt'));
+      expect((await request(app).get('/api/movie')).body.subtitles).toBe('ready');
+    });
+
+    test('no subtitle track chosen → subtitles: none', async () => {
+      setExists(['/valid/movie.mkv', PLAYLIST_PATH]);
+      const { app } = buildApp(true);
+      await prepare(app, { audioIndex: '1' });
+      expect((await request(app).get('/api/movie')).body.subtitles).toBe('none');
     });
 
     test('timemarkToSeconds', () => {
