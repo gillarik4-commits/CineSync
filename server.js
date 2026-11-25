@@ -17,7 +17,7 @@ const PORT = process.env.PORT || 3000;
 const DIST_DIR = path.join(__dirname, 'dist');
 const appState = {
   shareUrl: null,
-  isPartyActive: fs.existsSync(mediaManager.MOVIE_PATH)
+  isPartyActive: mediaManager.movieSource() !== null
 };
 mediaManager.setAppState(appState);
 
@@ -27,7 +27,15 @@ app.use(express.json());
 app.use(createRouteGuard(appState));
 
 app.use(express.static(DIST_DIR));
-app.use('/media', express.static(mediaManager.MEDIA_DIR));
+app.use(
+  '/media',
+  express.static(mediaManager.MEDIA_DIR, {
+    // The playlist grows while the movie prepares, so it must never be cached.
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith('.m3u8') || filePath.endsWith('.vtt')) res.setHeader('Cache-Control', 'no-store');
+    }
+  })
+);
 
 // Attach media routes
 app.use('/', mediaManager.router);

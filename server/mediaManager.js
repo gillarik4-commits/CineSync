@@ -9,15 +9,73 @@ const permissions = require('./permissions');
 
 const router = express.Router();
 const MEDIA_DIR = path.join(__dirname, '..', 'media');
+// Legacy single-file output (movies prepared before streaming); still served.
 const MOVIE_PATH = path.join(MEDIA_DIR, 'movie.mp4');
 const SUBTITLE_PATH = path.join(MEDIA_DIR, 'subtitles.vtt');
+// Streaming output: an HLS playlist plus ~6s chunks, playable while it's written.
+const STREAM_DIR = path.join(MEDIA_DIR, 'stream');
+const PLAYLIST_PATH = path.join(STREAM_DIR, 'index.m3u8');
+// The room opens once this many chunks exist (about 10 seconds of movie).
+const READY_SEGMENTS = 2;
 
 if (!fs.existsSync(MEDIA_DIR)) {
   fs.mkdirSync(MEDIA_DIR, { recursive: true });
 }
 
+/** fs helpers that never throw (and tolerate a partially-mocked fs in tests). */
+function tryRead(file) {
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch {
+    return null;
+  }
+}
+function tryRemove(target) {
+  try {
+    fs.rmSync(target, { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
+}
+
 let appStateRef = null;
 let movieInfo = loadMovieInfo(MEDIA_DIR);
+// Streaming progress for the current movie.
+let stream = { preparedSeconds: 0, complete: true };
+
+// A playlist left without an end marker means preparing was interrupted (e.g. the
+// server restarted). Close it so players treat what exists as the whole movie.
+(function repairInterruptedStream() {
+  const playlist = tryRead(PLAYLIST_PATH);
+  if (playlist && !playlist.includes('#EXT-X-ENDLIST')) {
+    try {
+      fs.appendFileSync(PLAYLIST_PATH, '#EXT-X-ENDLIST\n');
+    } catch {
+      /* ignore */
+    }
+  }
+})();
+
+/** Which kind of prepared movie exists right now: 'hls', 'mp4' (legacy) or null. */
+function movieSource() {
+  if (fs.existsSync(PLAYLIST_PATH)) return 'hls';
+  if (fs.existsSync(MOVIE_PATH)) return 'mp4';
+  return null;
+}
+
+function countSegments() {
+  const playlist = tryRead(PLAYLIST_PATH);
+  return playlist ? (playlist.match(/#EXTINF/g) || []).length : 0;
+}
+
+// Inspect results by file path, so prepare knows codecs without probing again.
+const probeCache = new Map();
+
+/** "00:12:34.56" → 754.56 */
+function timemarkToSeconds(mark) {
+  const m = /^(\d+):(\d+):(\d+(?:\.\d+)?)$/.exec(String(mark || ''));
+  return m ? Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) : null;
+}
 
 function setAppState(state) {
   appStateRef = state;
@@ -43,17 +101,20 @@ function handleInspect(filePath, res) {
     const duration = Number(metadata.format && metadata.format.duration);
     const result = { videoCodec: 'Unknown', duration: Number.isFinite(duration) ? duration : null, audio: [], subtitle: [] };
     
+    const audioCodecs = {};
     metadata.streams.forEach(stream => {
       const label = (stream.tags?.language || 'Unknown') + ` (${stream.codec_name})`;
       if (stream.codec_type === 'video') {
         result.videoCodec = stream.codec_name;
       } else if (stream.codec_type === 'audio') {
         result.audio.push({ index: stream.index, label });
+        audioCodecs[stream.index] = { codec: stream.codec_name, channels: stream.channels };
       } else if (stream.codec_type === 'subtitle') {
         result.subtitle.push({ index: stream.index, label });
       }
     });
 
+    probeCache.set(filePath, { videoCodec: result.videoCodec, duration: result.duration, audioCodecs });
     res.json(result);
   });
 }
@@ -94,87 +155,104 @@ const handlePrepare = (req, res) => {
     permissions.setPermissions(permissions.normalizePermissions(guestPermissions));
     broadcast({ type: 'PERMISSIONS', permissions: permissions.getPermissions(), by: null });
   }
-  const preparingInfo = { title: titleFromPath(filePath), fileName: path.basename(filePath) };
-
-  if (fs.existsSync(MOVIE_PATH)) fs.unlinkSync(MOVIE_PATH);
-  if (fs.existsSync(SUBTITLE_PATH)) fs.unlinkSync(SUBTITLE_PATH);
-
-  const extractSubtitles = () => {
-    return new Promise((resolve) => {
-      if (cleanExternalSub) {
-        const ext = path.extname(cleanExternalSub).toLowerCase();
-        if (ext === '.vtt') {
-          try {
-            fs.copyFileSync(cleanExternalSub, SUBTITLE_PATH);
-            resolve();
-          } catch (err) {
-            console.error('Error copying external vtt file:', err);
-            resolve();
-          }
-        } else if (ext === '.srt') {
-          ffmpeg(cleanExternalSub)
-            .outputOptions(['-y', '-c:s webvtt'])
-            .save(SUBTITLE_PATH)
-            .on('end', () => resolve())
-            .on('error', (err) => {
-              console.error('Error converting srt to vtt:', err.message);
-              resolve();
-            });
-        } else {
-          ffmpeg(cleanExternalSub)
-            .outputOptions(['-y', '-c:s webvtt'])
-            .save(SUBTITLE_PATH)
-            .on('end', () => resolve())
-            .on('error', (err) => {
-              console.error('Error converting external subtitle to vtt:', err.message);
-              resolve();
-            });
-        }
-      } else {
-        if (subIndex === 'none' || subIndex === undefined || subIndex === 'external') return resolve();
-        ffmpeg(filePath)
-          .outputOptions([`-map 0:${subIndex}`, '-c:s webvtt'])
-          .save(SUBTITLE_PATH)
-          .on('end', () => resolve())
-          .on('error', () => resolve());
-      }
-    });
+  const probe = probeCache.get(filePath) || {};
+  const preparingInfo = {
+    title: titleFromPath(filePath),
+    fileName: path.basename(filePath),
+    duration: probe.duration || null
   };
 
-  extractSubtitles().then(() => {
-    const audioOptions = hasAudio
-      ? [`-map 0:${audioIndex}`, '-c:a aac', '-ac 2']
-      : ['-an'];
+  // Clear the previous movie (also frees its disk space).
+  if (fs.existsSync(MOVIE_PATH)) fs.unlinkSync(MOVIE_PATH);
+  if (fs.existsSync(SUBTITLE_PATH)) fs.unlinkSync(SUBTITLE_PATH);
+  tryRemove(STREAM_DIR);
+  try {
+    fs.mkdirSync(STREAM_DIR, { recursive: true });
+  } catch {
+    /* ignore */
+  }
+  stream = { preparedSeconds: 0, complete: false };
 
-    const cmd = ffmpeg(filePath)
-      .outputOptions([
-        '-map 0:v:0',
-        ...audioOptions,
-        '-c:v copy',
-        '-movflags +faststart'
-      ])
-      .save(MOVIE_PATH);
+  // Subtitles run alongside the movie instead of before it, so they never delay the start.
+  const subtitleJob = (input, options) =>
+    ffmpeg(input)
+      .outputOptions(options)
+      .save(SUBTITLE_PATH)
+      .on('end', () => broadcast({ type: 'SUBTITLES_READY' }))
+      .on('error', (err) => console.error('Subtitle extraction failed:', err.message));
 
-    cmd.on('progress', (progress) => {
-      broadcast({ type: 'TRANSCODE_PROGRESS', percent: progress.percent });
-    });
+  if (cleanExternalSub && path.extname(cleanExternalSub).toLowerCase() === '.vtt') {
+    try {
+      fs.copyFileSync(cleanExternalSub, SUBTITLE_PATH);
+    } catch (err) {
+      console.error('Error copying external vtt file:', err.message);
+    }
+  } else if (cleanExternalSub) {
+    subtitleJob(cleanExternalSub, ['-y', '-c:s webvtt']);
+  } else if (subIndex !== 'none' && subIndex !== undefined && subIndex !== 'external') {
+    subtitleJob(filePath, [`-map 0:${subIndex}`, '-c:s webvtt']);
+  }
 
-    cmd.on('end', () => {
-      movieInfo = preparingInfo;
-      saveMovieInfo(MEDIA_DIR, movieInfo);
-      if (appStateRef) {
-        appStateRef.isPartyActive = true;
-      }
-      broadcast({ type: 'TRANSCODE_COMPLETE' });
-      broadcast({ type: 'MEDIA_READY' });
-    });
-    
-    cmd.on('error', (err) => {
-      console.error('Transcode error:', err.message);
-      // First line of ffmpeg's error is the useful summary; the rest is option-parsing noise.
-      const summary = String(err.message || 'Unknown error').split('\n')[0].trim();
-      broadcast({ type: 'TRANSCODE_ERROR', message: summary });
-    });
+  // Audio: copy if it's already browser-friendly stereo AAC; otherwise convert with
+  // the fast AAC coder (about twice as fast, and audio is the slow part).
+  const source = probe.audioCodecs && hasAudio ? probe.audioCodecs[audioIndex] : null;
+  const copyAudio = source && source.codec === 'aac' && source.channels <= 2;
+  const audioOptions = !hasAudio
+    ? ['-an']
+    : copyAudio
+      ? [`-map 0:${audioIndex}`, '-c:a copy']
+      : [`-map 0:${audioIndex}`, '-c:a aac', '-aac_coder fast', '-b:a 192k', '-ac 2'];
+
+  // Video is copied untouched. HEVC gets the "hvc1" tag Apple devices need.
+  const videoOptions = ['-map 0:v:0', '-c:v copy'];
+  if (probe.videoCodec === 'hevc') videoOptions.push('-tag:v hvc1');
+
+  const cmd = ffmpeg(filePath)
+    .outputOptions([
+      ...videoOptions,
+      ...audioOptions,
+      '-f hls',
+      '-hls_time 6',
+      '-hls_playlist_type event',
+      '-hls_segment_type fmp4',
+      '-hls_fmp4_init_filename init.mp4',
+      `-hls_segment_filename ${path.join(STREAM_DIR, 'seg_%05d.m4s')}`,
+      '-hls_flags independent_segments'
+    ])
+    .save(PLAYLIST_PATH);
+
+  let opened = false;
+  const openRoom = () => {
+    if (opened) return;
+    opened = true;
+    movieInfo = preparingInfo;
+    saveMovieInfo(MEDIA_DIR, movieInfo);
+    if (appStateRef) appStateRef.isPartyActive = true;
+    broadcast({ type: 'MEDIA_READY' });
+  };
+
+  cmd.on('progress', (progress) => {
+    const seconds = timemarkToSeconds(progress.timemark);
+    if (seconds !== null) stream.preparedSeconds = seconds;
+    const duration = preparingInfo.duration;
+    const percent = duration && seconds !== null ? (seconds / duration) * 100 : progress.percent;
+    broadcast({ type: 'TRANSCODE_PROGRESS', percent, seconds: stream.preparedSeconds, duration });
+    // People can start watching as soon as the first chunks exist.
+    if (!opened && countSegments() >= READY_SEGMENTS) openRoom();
+  });
+
+  cmd.on('end', () => {
+    stream = { preparedSeconds: preparingInfo.duration || stream.preparedSeconds, complete: true };
+    openRoom();
+    broadcast({ type: 'TRANSCODE_COMPLETE' });
+    broadcast({ type: 'STREAM_COMPLETE' });
+  });
+
+  cmd.on('error', (err) => {
+    console.error('Transcode error:', err.message);
+    // First line of ffmpeg's error is the useful summary; the rest is option-parsing noise.
+    const summary = String(err.message || 'Unknown error').split('\n')[0].trim();
+    broadcast({ type: 'TRANSCODE_ERROR', message: summary });
   });
 };
 
@@ -185,8 +263,16 @@ router.get('/api/movie', (req, res) => {
   // Re-derive from the file name so title-cleanup improvements apply to movies
   // that were prepared before them.
   const active = !appStateRef || appStateRef.isPartyActive;
-  const title = movieInfo && active ? titleFromPath(movieInfo.fileName || movieInfo.title) : null;
-  res.json({ title });
+  const source = active ? movieSource() : null;
+  const title = movieInfo && source ? titleFromPath(movieInfo.fileName || movieInfo.title) : null;
+  res.json({
+    title,
+    source,
+    duration: (movieInfo && movieInfo.duration) || null,
+    // How far the movie is ready; while preparing, nobody can jump past this.
+    preparedSeconds: stream.complete ? null : stream.preparedSeconds,
+    complete: stream.complete
+  });
 });
 
 /**
@@ -243,4 +329,4 @@ router.get('/video', (req, res) => {
   }
 });
 
-module.exports = { router, setAppState, parseRange, MEDIA_DIR, MOVIE_PATH };
+module.exports = { router, setAppState, parseRange, movieSource, timemarkToSeconds, MEDIA_DIR, MOVIE_PATH, STREAM_DIR };

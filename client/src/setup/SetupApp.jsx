@@ -509,7 +509,7 @@ function PrepareStep({ filePath, progress, done }) {
           {done ? (
             'Ready. Opening the room…'
           ) : (
-            <ShinyText text="Preparing your movie" color="#8a8a8a" shineColor="#ffffff" speed={2.2} delay={0.4} />
+            <ShinyText text="Getting the first scenes ready" color="#8a8a8a" shineColor="#ffffff" speed={2.2} delay={0.4} />
           )}
         </div>
         <div className="prepare-pct mono">{known ? `${progress}%` : ''}</div>
@@ -529,7 +529,7 @@ function PrepareStep({ filePath, progress, done }) {
           {basename(filePath)}
         </span>
         <br />
-        Copying the video and converting audio for the browser. This is usually quick, since the video isn’t re-encoded.
+        The room opens as soon as the first few seconds are ready. The rest keeps preparing while you watch.
       </p>
     </div>
   );

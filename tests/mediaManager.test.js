@@ -22,6 +22,13 @@ jest.mock('fs', () => ({
   unlinkSync: jest.fn(),
   statSync: jest.fn(),
   createReadStream: jest.fn(),
+  readFileSync: jest.fn(() => {
+    throw new Error('ENOENT');
+  }),
+  rmSync: jest.fn(),
+  appendFileSync: jest.fn(),
+  copyFileSync: jest.fn(),
+  writeFileSync: jest.fn(),
 }));
 
 const mockClients = [];
@@ -44,6 +51,7 @@ const request = require('supertest');
 
 const MEDIA_DIR = path.join(__dirname, '..', 'media');
 const MOVIE_PATH = path.join(MEDIA_DIR, 'movie.mp4');
+const PLAYLIST_PATH = path.join(MEDIA_DIR, 'stream', 'index.m3u8');
 const SUBTITLE_PATH = path.join(MEDIA_DIR, 'subtitles.vtt');
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -384,14 +392,14 @@ describe('mediaManager', () => {
   // ── GET /api/movie ────────────────────────────────────────────────────────
 
   describe('GET /api/movie', () => {
-    test('returns a null title before any movie is prepared', async () => {
+    test('reports nothing before any movie is prepared', async () => {
       const { app } = buildApp();
       const res = await request(app).get('/api/movie');
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ title: null });
+      expect(res.body).toMatchObject({ title: null, source: null });
     });
 
-    test('returns the cleaned title once a transcode finishes', async () => {
+    test('returns the cleaned title and HLS source once a movie is ready', async () => {
       setExists(['/films/The.Matrix.1999.1080p.BluRay.mkv']);
       let endCb = null;
       jest.requireMock('fluent-ffmpeg').mockImplementation(() =>
@@ -404,10 +412,108 @@ describe('mediaManager', () => {
         .post('/api/prepare')
         .send({ filePath: '/films/The.Matrix.1999.1080p.BluRay.mkv', audioIndex: '1', subIndex: 'none' });
       await new Promise((r) => setTimeout(r, 50));
+      setExists(['/films/The.Matrix.1999.1080p.BluRay.mkv', PLAYLIST_PATH]);
       endCb();
 
       const res = await request(app).get('/api/movie');
-      expect(res.body).toEqual({ title: 'The Matrix (1999)' });
+      expect(res.body).toMatchObject({ title: 'The Matrix (1999)', source: 'hls', complete: true });
+    });
+
+    test('a legacy single-file movie is still served as mp4', async () => {
+      setExists([MOVIE_PATH]);
+      const { app } = buildApp(true);
+      const res = await request(app).get('/api/movie');
+      expect(res.body.source).toBe('mp4');
+    });
+  });
+
+  // ── Streaming pipeline ───────────────────────────────────────────────────
+
+  describe('streaming pipeline', () => {
+    function probeWith(streams, duration = 5400) {
+      jest.requireMock('fluent-ffmpeg').ffprobe.mockImplementation((_file, cb) =>
+        cb(null, { format: { duration }, streams })
+      );
+    }
+
+    async function prepare(app, body) {
+      const instances = [];
+      jest.requireMock('fluent-ffmpeg').mockImplementation(() => {
+        const handlers = {};
+        const inst = makeFfmpegInst((event, cb) => {
+          handlers[event] = cb;
+        });
+        inst.handlers = handlers;
+        instances.push(inst);
+        return inst;
+      });
+      const res = await request(app).post('/api/prepare').send({ filePath: '/valid/movie.mkv', subIndex: 'none', ...body });
+      await new Promise((r) => setTimeout(r, 30));
+      const main = instances[instances.length - 1];
+      return { res, main, options: main.outputOptions.mock.calls[0][0], savedTo: main.save.mock.calls[0][0] };
+    }
+
+    test('writes an HLS playlist of fMP4 chunks, copying the video', async () => {
+      setExists(['/valid/movie.mkv']);
+      const { app } = buildApp();
+      const { options, savedTo } = await prepare(app, { audioIndex: '1' });
+      expect(savedTo).toBe(PLAYLIST_PATH);
+      expect(options).toEqual(
+        expect.arrayContaining(['-map 0:v:0', '-c:v copy', '-f hls', '-hls_playlist_type event', '-hls_segment_type fmp4'])
+      );
+      expect(options).not.toContain('-movflags +faststart');
+    });
+
+    test('converts audio with the fast AAC coder when it needs converting', async () => {
+      setExists(['/valid/movie.mkv']);
+      probeWith([
+        { index: 0, codec_type: 'video', codec_name: 'hevc' },
+        { index: 1, codec_type: 'audio', codec_name: 'eac3', channels: 6 }
+      ]);
+      const { app } = buildApp();
+      await request(app).post('/api/inspect').send({ filePath: '/valid/movie.mkv' });
+      const { options } = await prepare(app, { audioIndex: '1' });
+      expect(options).toEqual(expect.arrayContaining(['-map 0:1', '-c:a aac', '-aac_coder fast', '-ac 2']));
+      expect(options).toContain('-tag:v hvc1');
+    });
+
+    test('copies audio that is already stereo AAC, and skips the HEVC tag for H.264', async () => {
+      setExists(['/valid/movie.mkv']);
+      probeWith([
+        { index: 0, codec_type: 'video', codec_name: 'h264' },
+        { index: 1, codec_type: 'audio', codec_name: 'aac', channels: 2 }
+      ]);
+      const { app } = buildApp();
+      await request(app).post('/api/inspect').send({ filePath: '/valid/movie.mkv' });
+      const { options } = await prepare(app, { audioIndex: '1' });
+      expect(options).toEqual(expect.arrayContaining(['-map 0:1', '-c:a copy']));
+      expect(options).not.toContain('-c:a aac');
+      expect(options).not.toContain('-tag:v hvc1');
+    });
+
+    test('opens the room once the first chunks exist, before preparing finishes', async () => {
+      setExists(['/valid/movie.mkv']);
+      const { app, appState } = buildApp(false);
+      const { main } = await prepare(app, { audioIndex: '1' });
+
+      const fs = jest.requireMock('fs');
+      fs.readFileSync.mockImplementation(() => '#EXTM3U\n#EXTINF:6,\nseg_00000.m4s\n');
+      main.handlers.progress({ timemark: '00:00:06.00' });
+      expect(appState.isPartyActive).toBe(false);
+
+      fs.readFileSync.mockImplementation(() => '#EXTM3U\n#EXTINF:6,\na\n#EXTINF:6,\nb\n');
+      main.handlers.progress({ timemark: '00:00:12.50' });
+      expect(appState.isPartyActive).toBe(true);
+
+      const res = await request(app).get('/api/movie');
+      expect(res.body).toMatchObject({ preparedSeconds: 12.5, complete: false });
+    });
+
+    test('timemarkToSeconds', () => {
+      const { timemarkToSeconds } = require('../server/mediaManager');
+      expect(timemarkToSeconds('01:02:03.50')).toBe(3723.5);
+      expect(timemarkToSeconds('00:00:00.00')).toBe(0);
+      expect(timemarkToSeconds('nope')).toBeNull();
     });
   });
 

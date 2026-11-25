@@ -30,7 +30,7 @@ export function ToastStack({ toasts }) {
 }
 
 /** Quiet overlay while paused: what's playing, who paused, how much is left. */
-export function PauseScreen({ show, videoRef, title, actor, me }) {
+export function PauseScreen({ show, videoRef, title, actor, me, duration: knownDuration }) {
   return (
     <AnimatePresence>
       {show && (
@@ -42,15 +42,16 @@ export function PauseScreen({ show, videoRef, title, actor, me }) {
           transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
           aria-hidden="true"
         >
-          <PauseDetails videoRef={videoRef} title={title} actor={actor} me={me} />
+          <PauseDetails videoRef={videoRef} title={title} actor={actor} me={me} knownDuration={knownDuration} />
         </motion.div>
       )}
     </AnimatePresence>
   );
 }
 
-function PauseDetails({ videoRef, title, actor, me }) {
-  const { time, duration } = useVideoState(videoRef);
+function PauseDetails({ videoRef, title, actor, me, knownDuration }) {
+  const { time, duration: mediaDuration } = useVideoState(videoRef);
+  const duration = knownDuration || mediaDuration;
   const left = formatDuration(Math.max(0, duration - time));
   return (
     <motion.div

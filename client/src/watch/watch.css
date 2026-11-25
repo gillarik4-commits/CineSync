@@ -1520,3 +1520,36 @@ body {
   text-align: center;
   cursor: default;
 }
+
+/* --------------------------------------------------------------------------
+   Streaming while preparing
+   -------------------------------------------------------------------------- */
+.scrubber-track.is-preparing {
+  background: rgba(255, 255, 255, 0.08);
+}
+.scrubber-prepared {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: rgba(255, 255, 255, 0.2);
+  transition: width 0.6s var(--ease);
+}
+.scrubber-tip-note {
+  color: rgba(255, 255, 255, 0.55);
+}
+.preparing-label {
+  margin-left: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+@media (max-width: 420px) {
+  .preparing-label {
+    display: none;
+  }
+}

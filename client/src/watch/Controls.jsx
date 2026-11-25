@@ -21,18 +21,21 @@ import { formatTime } from '../shared/lib/format';
  * Seek bar. The fill is driven from requestAnimationFrame straight to the DOM
  * so playback looks smooth without re-rendering React 60 times a second.
  */
-function Scrubber({ videoRef, duration, buffered, onSeek, onScrubbingChange, disabled }) {
+function Scrubber({ videoRef, duration, buffered, prepared, onSeek, onScrubbingChange, disabled }) {
   const barRef = useRef(null);
   const fillRef = useRef(null);
   const [hover, setHover] = useState(null); // { pos, time }
   const scrubbing = useRef(false);
+  const durationRef = useRef(duration);
+  durationRef.current = duration;
 
   useEffect(() => {
     let raf = 0;
     const tick = () => {
       const v = videoRef.current;
       if (v && fillRef.current && !scrubbing.current) {
-        const pct = v.duration ? (v.currentTime / v.duration) * 100 : 0;
+        const d = durationRef.current;
+        const pct = d ? Math.min(100, (v.currentTime / d) * 100) : 0;
         fillRef.current.style.width = `${pct}%`;
       }
       raf = requestAnimationFrame(tick);
@@ -73,6 +76,8 @@ function Scrubber({ videoRef, duration, buffered, onSeek, onScrubbingChange, dis
   };
 
   const bufferedPct = duration ? Math.min(100, (buffered / duration) * 100) : 0;
+  // While preparing, everything past this point doesn't exist yet.
+  const preparedPct = prepared !== null && prepared !== undefined && duration ? Math.min(100, (prepared / duration) * 100) : null;
 
   return (
     <div
@@ -92,9 +97,10 @@ function Scrubber({ videoRef, duration, buffered, onSeek, onScrubbingChange, dis
       onPointerCancel={finish}
       onPointerLeave={() => !scrubbing.current && setHover(null)}
     >
-      <div className="scrubber-track">
+      <div className={`scrubber-track${preparedPct !== null ? ' is-preparing' : ''}`}>
+        {preparedPct !== null && <div className="scrubber-prepared" style={{ width: `${preparedPct}%` }} />}
         <div className="scrubber-buffered" style={{ width: `${bufferedPct}%` }} />
-        {hover && <div className="scrubber-hover" style={{ width: `${hover.pos * 100}%` }} />}
+        {hover && <div className="scrubber-hover" style={{ width: `${Math.min(hover.pos * 100, preparedPct ?? 100)}%` }} />}
         <div ref={fillRef} className="scrubber-fill">
           <span className="scrubber-thumb" />
         </div>
@@ -102,6 +108,7 @@ function Scrubber({ videoRef, duration, buffered, onSeek, onScrubbingChange, dis
       {hover && (
         <div className="scrubber-tooltip mono" style={{ left: `${hover.pos * 100}%` }}>
           {formatTime(hover.time)}
+          {preparedPct !== null && hover.pos * 100 > preparedPct && <span className="scrubber-tip-note"> · not ready yet</span>}
         </div>
       )}
     </div>
@@ -150,9 +157,13 @@ export default function Controls({
   onChangeMovie,
   onScrubbingChange,
   canPlayback = true,
-  canSeek = true
+  canSeek = true,
+  duration: knownDuration = null,
+  prepared = null
 }) {
-  const v = useVideoState(videoRef);
+  const media = useVideoState(videoRef);
+  // A streamed movie's own duration grows as it prepares; the real length comes from the server.
+  const v = { ...media, duration: knownDuration || media.duration };
   const [showRemaining, setShowRemaining] = useState(false);
 
   return (
@@ -161,6 +172,7 @@ export default function Controls({
         videoRef={videoRef}
         duration={v.duration}
         buffered={v.buffered}
+        prepared={prepared}
         onSeek={onSeek}
         onScrubbingChange={onScrubbingChange}
         disabled={!canSeek}
@@ -194,6 +206,11 @@ export default function Controls({
             <span className="time-sep">/</span>
             <span className="time-total">{formatTime(v.duration)}</span>
           </button>
+          {prepared !== null && v.duration > 0 && (
+            <span className="preparing-label" title="The host is still preparing the rest of the movie">
+              Preparing {Math.min(99, Math.floor((prepared / v.duration) * 100))}%
+            </span>
+          )}
         </div>
 
         <div className="controls-group">

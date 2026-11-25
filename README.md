@@ -7,8 +7,7 @@ Bypass port-forwarding headaches and manual transcoding. CineSync leverages zero
 ## Key Features 🚀
 
 - **Zero-Config Cloudflare Tunneling:** CineSync automatically spins up and intercepts a secure Cloudflare Quick Tunnel (`.trycloudflare.com`) from directly within Node.js. No manual port-forwarding or external terminals required.
-- **Automated FFmpeg Media Pipeline:** Select your local `.mkv`, `.mp4`, or `.avi`. The built-in dashboard will parse audio/subtitle tracks and spawn a background `ffmpeg` process to perfectly remux your selection into an optimized, web-ready `H.264 / AAC 2.0` stream.
-- **HTTP 206 Partial Streaming:** The backend natively routes standard HTTP Byte-Range requests (`206 Partial Content`), ensuring instantaneous video buffering, skipping, and minimal memory footprints for remote clients.
+- **Watch within seconds:** Pick a local `.mkv`, `.mp4` or `.avi` and the room opens about a second later. FFmpeg copies the video untouched (no re-encoding) and converts only the audio, writing short HLS chunks; everyone can start watching while the rest prepares in the background, typically 30–40× faster than playback. Until it's done, you can only jump to the part that's ready (shown on the seek bar).
 - **Sub-Second WebSocket Synchronization:** The internal sync engine enforces strict timeline lockstep. Late joiners are fed interpolated time states, and active viewers are continuously checked for timeline drift (automatically snapping them back if they drift beyond 500ms).
 - **Minimal, responsive React UI:** A clean theatre view with live chat, emoji reactions, three fullscreen chat styles, in-app subtitles, keyboard shortcuts, and a phone-friendly layout.
 

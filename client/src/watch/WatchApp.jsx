@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Check, Link2, Pause, Play } from 'lucide-react';
 import BlurText from '../shared/components/reactbits/BlurText';
@@ -14,6 +14,8 @@ import Avatar from './Avatar';
 import { useFullscreen } from './hooks/useFullscreen';
 import { useIdle } from './hooks/useIdle';
 import { PHONE_LANDSCAPE, useMediaQuery } from './hooks/useMediaQuery';
+import { useStream } from './hooks/useStream';
+import { formatTime } from '../shared/lib/format';
 import { usePlayback } from './hooks/useVideo';
 import { appendMessage, chatModeOrDefault } from './messages';
 import AmbientGlow from './AmbientGlow';
@@ -77,6 +79,11 @@ export default function WatchApp() {
   const [scrubbing, setScrubbing] = useState(false);
   const [participantsOpen, setParticipantsOpen] = useState(false);
   const [movieTitle, setMovieTitle] = useState(null);
+  const [movieSource, setMovieSource] = useState(undefined); // undefined = still asking
+  const [movieDuration, setMovieDuration] = useState(null);
+  const [preparedSeconds, setPreparedSeconds] = useState(null); // null = fully ready
+  const preparedRef = useRef(null);
+  preparedRef.current = preparedSeconds;
   const [toasts, setToasts] = useState([]);
   const [actor, setActor] = useState(null); // last play/pause: { action, by } (by null = you)
   const [typingUsers, setTypingUsers] = useState({}); // name → expiry
@@ -114,7 +121,7 @@ export default function WatchApp() {
   const [active, poke] = useIdle(3000);
   const controlsVisible = paused || active || scrubbing || modeMenuOpen || participantsOpen || replyOpen;
 
-  const subtitleSrc = useMemo(() => `/media/subtitles.vtt?t=${Date.now()}`, []);
+  const [subtitleSrc, setSubtitleSrc] = useState(() => `/media/subtitles.vtt?t=${Date.now()}`);
 
   // ---------------------------------------------------------------- sync
   const isRemote = () => Date.now() < remoteUntil.current;
@@ -202,6 +209,16 @@ export default function WatchApp() {
           setPerms(next);
           break;
         }
+        case 'TRANSCODE_PROGRESS':
+          // The host is still preparing: track how far people can jump.
+          if (Number.isFinite(data.seconds)) setPreparedSeconds((cur) => (cur === null ? cur : Math.max(cur, data.seconds)));
+          break;
+        case 'STREAM_COMPLETE':
+          setPreparedSeconds(null);
+          break;
+        case 'SUBTITLES_READY':
+          setSubtitleSrc(`/media/subtitles.vtt?t=${Date.now()}`);
+          break;
         case 'PERMISSION_DENIED':
           toast({ key: `deny:${data.capability}`, text: deniedText(data.capability) });
           break;
@@ -352,6 +369,17 @@ export default function WatchApp() {
         toast({ key: 'deny:seek', text: deniedText('seek') });
         return;
       }
+      // While the host is still preparing, only the part that's ready can be watched.
+      // The player re-reads the growing chunk list every few seconds, so it may not
+      // reach as far as the server has prepared yet: respect whichever is smaller.
+      if (preparedRef.current !== null) {
+        const reachable = v.seekable && v.seekable.length ? v.seekable.end(v.seekable.length - 1) : 0;
+        const limit = Math.max(0, Math.min(preparedRef.current, reachable) - 2);
+        if (time > limit) {
+          toast({ key: 'prep:seek', text: `Still getting the movie ready. You can jump up to ${formatTime(limit)}.` });
+          time = limit;
+        }
+      }
       v.currentTime = Math.max(0, Math.min(v.duration || 0, time));
       broadcast('SEEK');
       poke();
@@ -472,13 +500,20 @@ export default function WatchApp() {
   // ---------------------------------------------------------------- movie title
   useEffect(() => {
     api('/api/movie')
-      .then(({ title }) => {
-        if (!title) return;
-        setMovieTitle(title);
-        document.title = `${title} · CineSync`;
+      .then(({ title, source, duration, preparedSeconds: ready, complete }) => {
+        setMovieSource(source || null);
+        setMovieDuration(Number.isFinite(duration) ? duration : null);
+        setPreparedSeconds(complete === false && Number.isFinite(ready) ? ready : null);
+        if (!source) setNoMovie(true);
+        if (title) {
+          setMovieTitle(title);
+          document.title = `${title} · CineSync`;
+        }
       })
-      .catch(() => {});
+      .catch(() => setMovieSource(null));
   }, []);
+
+  useStream(videoRef, movieSource, () => setNoMovie(true));
 
   // Pause screen appears after a beat, so quick pauses don't flash it.
   const [pauseScreen, setPauseScreen] = useState(false);
@@ -530,7 +565,7 @@ export default function WatchApp() {
       el.removeEventListener('error', onError);
       track.removeEventListener('cuechange', onCue);
     };
-  }, []);
+  }, [subtitleSrc]);
 
   // iPhone fullscreen is Apple's own player, which can't show our overlay. While
   // it's open, let the browser draw the subtitles; hand them back afterwards.
@@ -552,7 +587,7 @@ export default function WatchApp() {
       v.removeEventListener('webkitbeginfullscreen', onBegin);
       v.removeEventListener('webkitendfullscreen', onEnd);
     };
-  }, []);
+  }, [subtitleSrc]);
 
   // ---------------------------------------------------------------- keyboard
   useEffect(() => {
@@ -633,14 +668,12 @@ export default function WatchApp() {
         <video
           ref={videoRef}
           className="video"
-          src="/video"
           preload="metadata"
           playsInline
           crossOrigin="anonymous"
-          onError={() => setNoMovie(true)}
           onLoadedMetadata={() => setNoMovie(false)}
         >
-          <track ref={trackRef} kind="subtitles" src={subtitleSrc} srcLang="en" label="Subtitles" default />
+          <track key={subtitleSrc} ref={trackRef} kind="subtitles" src={subtitleSrc} srcLang="en" label="Subtitles" default />
         </video>
 
         <div className="stage-shade" aria-hidden="true" />
@@ -655,7 +688,7 @@ export default function WatchApp() {
           </div>
         )}
 
-        <PauseScreen show={pauseScreen} videoRef={videoRef} title={movieTitle} actor={actor} me={username} />
+        <PauseScreen show={pauseScreen} videoRef={videoRef} title={movieTitle} actor={actor} me={username} duration={movieDuration} />
 
         <header className="topbar" onClick={(e) => e.stopPropagation()}>
           <div className="topbar-title">
@@ -789,6 +822,8 @@ export default function WatchApp() {
           onChangeMovie={isHost ? () => setConfirmChange(true) : null}
           canPlayback={can.playback}
           canSeek={can.seek}
+          duration={movieDuration}
+          prepared={preparedSeconds}
           onScrubbingChange={setScrubbing}
         />
       </div>
