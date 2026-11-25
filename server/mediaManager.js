@@ -19,6 +19,15 @@ function setAppState(state) {
   appStateRef = state;
 }
 
+function broadcast(message) {
+  const wss = getWss();
+  if (!wss) return;
+  const payload = JSON.stringify(message);
+  wss.clients.forEach(c => {
+    if (c.readyState === 1) c.send(payload);
+  });
+}
+
 function handleInspect(filePath, res) {
   if (!filePath || !fs.existsSync(filePath)) {
     return res.status(400).json({ error: 'File not found' });
@@ -56,6 +65,16 @@ const handlePrepare = (req, res) => {
   const { filePath, audioIndex, subIndex, externalSubPath } = req.body;
   if (!filePath || !fs.existsSync(filePath)) {
     return res.status(400).json({ error: 'File not found' });
+  }
+
+  // Track indexes are interpolated into ffmpeg options, so only accept plain stream numbers.
+  const isStreamIndex = (v) => /^\d+$/.test(String(v));
+  const hasAudio = audioIndex !== undefined && audioIndex !== null && audioIndex !== '' && audioIndex !== 'none';
+  if (hasAudio && !isStreamIndex(audioIndex)) {
+    return res.status(400).json({ error: 'Invalid audio track' });
+  }
+  if (subIndex !== undefined && !['none', 'external'].includes(subIndex) && !isStreamIndex(subIndex)) {
+    return res.status(400).json({ error: 'Invalid subtitle track' });
   }
 
   const cleanExternalSub = (typeof externalSubPath === 'string' && externalSubPath.trim()) ? externalSubPath.trim() : null;
@@ -112,43 +131,36 @@ const handlePrepare = (req, res) => {
   };
 
   extractSubtitles().then(() => {
+    const audioOptions = hasAudio
+      ? [`-map 0:${audioIndex}`, '-c:a aac', '-ac 2']
+      : ['-an'];
+
     const cmd = ffmpeg(filePath)
       .outputOptions([
         '-map 0:v:0',
-        `-map 0:${audioIndex}`,
+        ...audioOptions,
         '-c:v copy',
-        '-c:a aac',
-        '-ac 2',
         '-movflags +faststart'
       ])
       .save(MOVIE_PATH);
-      
+
     cmd.on('progress', (progress) => {
-      const wss = getWss();
-      if (wss) {
-        wss.clients.forEach(c => {
-          c.send(JSON.stringify({ type: 'TRANSCODE_PROGRESS', percent: progress.percent }));
-        });
-      }
+      broadcast({ type: 'TRANSCODE_PROGRESS', percent: progress.percent });
     });
 
     cmd.on('end', () => {
       if (appStateRef) {
         appStateRef.isPartyActive = true;
       }
-      const wss = getWss();
-      if (wss) {
-        wss.clients.forEach(c => {
-          if (c.readyState === 1) {
-            c.send(JSON.stringify({ type: 'TRANSCODE_COMPLETE' }));
-            c.send(JSON.stringify({ type: 'MEDIA_READY' }));
-          }
-        });
-      }
+      broadcast({ type: 'TRANSCODE_COMPLETE' });
+      broadcast({ type: 'MEDIA_READY' });
     });
     
     cmd.on('error', (err) => {
       console.error('Transcode error:', err.message);
+      // First line of ffmpeg's error is the useful summary; the rest is option-parsing noise.
+      const summary = String(err.message || 'Unknown error').split('\n')[0].trim();
+      broadcast({ type: 'TRANSCODE_ERROR', message: summary });
     });
   });
 };

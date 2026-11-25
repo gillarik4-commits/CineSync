@@ -130,7 +130,7 @@ inspectBtn.addEventListener('click', async () => {
     if (data.audio && data.audio.length > 0) {
       audioSelect.innerHTML = data.audio.map(a => `<option value="${a.index}">${escapeHtml(a.label)}</option>`).join('');
     } else {
-      audioSelect.innerHTML = `<option value="1">Default audio</option>`;
+      audioSelect.innerHTML = `<option value="none">No audio track in this file</option>`;
     }
 
     let subOptions = `<option value="none">None</option>`;
@@ -227,15 +227,20 @@ startBtn.addEventListener('click', async () => {
       throw new Error(data.error || 'Failed to start media pipeline');
     }
   } catch (err) {
-    prepareError.textContent = err.message || 'Transcode preparation failed';
-    prepareError.style.display = 'block';
-    startBtn.disabled = false;
-    progressContainer.style.display = 'none';
-
-    stepIndicator3.classList.remove('active');
-    stepIndicator2.classList.add('active');
+    showPrepareFailure(err.message || 'Transcode preparation failed');
   }
 });
+
+function showPrepareFailure(message) {
+  prepareError.textContent = message;
+  prepareError.style.display = 'block';
+  startBtn.disabled = false;
+  progressContainer.style.display = 'none';
+
+  stepIndicator3.classList.remove('active');
+  stepIndicator2.classList.remove('completed');
+  stepIndicator2.classList.add('active');
+}
 
 // ==========================================================================
 // WebSocket Progress Listener
@@ -253,6 +258,8 @@ function initProgressWebSocket() {
         const percent = Math.min(100, Math.max(0, Math.round(data.percent || 0)));
         progressBar.style.width = `${percent}%`;
         progressText.textContent = `Processing: ${percent}%`;
+      } else if (data.type === 'TRANSCODE_ERROR') {
+        showPrepareFailure(`Couldn't prepare this movie: ${data.message}`);
       } else if (data.type === 'TRANSCODE_COMPLETE' || data.type === 'MEDIA_READY') {
         progressBarBg.classList.remove('indeterminate');
         progressBar.style.width = '100%';

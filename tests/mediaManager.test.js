@@ -24,6 +24,11 @@ jest.mock('fs', () => ({
   createReadStream: jest.fn(),
 }));
 
+const mockClients = [];
+jest.mock('../server/syncManager', () => ({
+  getWss: () => ({ clients: mockClients }),
+}));
+
 jest.mock('fluent-ffmpeg', () => {
   const factory = jest.fn();
   factory.ffprobe = jest.fn();
@@ -278,6 +283,66 @@ describe('mediaManager', () => {
       await new Promise((r) => setTimeout(r, 30));
 
       expect(appState.isPartyActive).toBe(false);
+    });
+
+    /** POST /api/prepare and return the outputOptions passed to the main transcode */
+    async function prepareAndGetOptions(body) {
+      setExists(['/valid/movie.mkv']);
+      const ffmpegFn = jest.requireMock('fluent-ffmpeg');
+      const instances = [];
+      ffmpegFn.mockImplementation(() => {
+        const inst = makeFfmpegInst(null);
+        instances.push(inst);
+        return inst;
+      });
+      const { app } = buildApp();
+      const res = await request(app).post('/api/prepare').send({ filePath: '/valid/movie.mkv', subIndex: 'none', ...body });
+      await new Promise((r) => setTimeout(r, 50));
+      const main = instances[instances.length - 1];
+      return { res, options: main ? main.outputOptions.mock.calls[0][0] : null };
+    }
+
+    test('maps the chosen audio stream and encodes it to stereo AAC', async () => {
+      const { res, options } = await prepareAndGetOptions({ audioIndex: '2' });
+      expect(res.status).toBe(200);
+      expect(options).toEqual(expect.arrayContaining(['-map 0:v:0', '-map 0:2', '-c:a aac', '-ac 2']));
+      expect(options).not.toContain('-an');
+    });
+
+    test.each(['none', undefined, ''])('audioIndex=%p transcodes video only (-an, no audio map)', async (audioIndex) => {
+      const { res, options } = await prepareAndGetOptions({ audioIndex });
+      expect(res.status).toBe(200);
+      expect(options).toContain('-an');
+      expect(options.some(o => /^-map 0:\d/.test(o) || o === '-map 0:none' || o === '-map 0:')).toBe(false);
+    });
+
+    test.each([
+      [{ audioIndex: '1 -f null' }, /audio/],
+      [{ audioIndex: 'abc' }, /audio/],
+      [{ audioIndex: '1', subIndex: '0 -y /etc/x' }, /subtitle/]
+    ])('rejects non-numeric track indexes %p', async (body, msg) => {
+      const { res } = await prepareAndGetOptions(body);
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(msg);
+    });
+
+    test('broadcasts TRANSCODE_ERROR with the first line of the ffmpeg error', async () => {
+      const sent = [];
+      mockClients.length = 0;
+      mockClients.push({ readyState: 1, send: (m) => sent.push(JSON.parse(m)) });
+
+      setExists(['/valid/movie.mkv']);
+      let errorCb = null;
+      jest.requireMock('fluent-ffmpeg').mockImplementation(() =>
+        makeFfmpegInst((event, cb) => { if (event === 'error') errorCb = cb; })
+      );
+      const { app } = buildApp();
+      await request(app).post('/api/prepare').send({ filePath: '/valid/movie.mkv', audioIndex: '1', subIndex: 'none' });
+      await new Promise((r) => setTimeout(r, 50));
+
+      errorCb(new Error("ffmpeg exited with code 234: Stream map '' matches no streams.\nTo ignore this, add a trailing '?' to the map."));
+      expect(sent).toContainEqual({ type: 'TRANSCODE_ERROR', message: "ffmpeg exited with code 234: Stream map '' matches no streams." });
+      mockClients.length = 0;
     });
 
     test('/api/start-party alias returns 400 for invalid path (edge case 5 — retry path)', async () => {
