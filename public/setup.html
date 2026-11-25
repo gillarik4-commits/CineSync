@@ -35,9 +35,15 @@
     <!-- Step 1: File Selection -->
     <div id="setup-step-1">
       <div class="form-group">
-        <label for="filepath-input">Local Movie File Path</label>
-        <input type="text" id="filepath-input" class="mono-input" placeholder="/home/user/Movies/movie.mkv" autocomplete="off" spellcheck="false">
-        <div class="field-hint">Paste the full path, e.g. /home/user/movie.mkv. Tip: on Windows, Shift+right-click the file, then Copy as path.</div>
+        <label for="filepath-input">Movie File</label>
+        <div class="path-input-row">
+          <input type="text" id="filepath-input" class="mono-input" placeholder="/home/user/Movies/movie.mkv" autocomplete="off" spellcheck="false">
+          <button type="button" class="browse-btn" id="browseMovieBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
+            Browse
+          </button>
+        </div>
+        <div class="field-hint">Browse your computer for the movie, or paste its full path.</div>
       </div>
 
       <!-- Recent Files list from localStorage -->
@@ -73,8 +79,14 @@
       </div>
 
       <div class="form-group">
-        <label for="external-sub-input">External Subtitle File Path (Optional .srt / .vtt)</label>
-        <input type="text" id="external-sub-input" class="mono-input" placeholder="/home/user/Movies/subtitles.srt" autocomplete="off" spellcheck="false">
+        <label for="external-sub-input">External Subtitle File (Optional .srt / .vtt)</label>
+        <div class="path-input-row">
+          <input type="text" id="external-sub-input" class="mono-input" placeholder="/home/user/Movies/subtitles.srt" autocomplete="off" spellcheck="false">
+          <button type="button" class="browse-btn" id="browseSubBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
+            Browse
+          </button>
+        </div>
         <div class="field-hint" id="externalSubHint">Providing an external subtitle file will override embedded tracks.</div>
       </div>
 
@@ -89,6 +101,33 @@
           <div class="progress-bar-fill" id="progress-bar"></div>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- File Browser Modal -->
+  <div class="fb-overlay" id="fileBrowser" hidden>
+    <div class="fb-dialog" role="dialog" aria-modal="true" aria-labelledby="fbTitle">
+      <div class="fb-header">
+        <h2 class="fb-title" id="fbTitle">Choose a movie</h2>
+        <button type="button" class="fb-close" id="fbCloseBtn" title="Close (Esc)" aria-label="Close">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+
+      <div class="fb-places" id="fbPlaces"></div>
+
+      <div class="fb-pathbar">
+        <button type="button" class="fb-up" id="fbUpBtn" title="Up one folder (Backspace)" aria-label="Up one folder">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>
+        </button>
+        <div class="fb-path" id="fbPath" title=""></div>
+      </div>
+
+      <input type="text" class="fb-filter" id="fbFilter" placeholder="Filter this folder…" autocomplete="off" spellcheck="false" aria-label="Filter this folder">
+
+      <div class="fb-list" id="fbList" role="listbox" aria-label="Folder contents"></div>
+
+      <div class="fb-footer" id="fbFooter"></div>
     </div>
   </div>
 

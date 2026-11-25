@@ -267,6 +267,222 @@ function initProgressWebSocket() {
   };
 }
 
+// ==========================================================================
+// File Browser (lists folders on the host machine via /api/browse)
+// ==========================================================================
+const fileBrowser = document.getElementById('fileBrowser');
+const fbTitle = document.getElementById('fbTitle');
+const fbCloseBtn = document.getElementById('fbCloseBtn');
+const fbPlaces = document.getElementById('fbPlaces');
+const fbUpBtn = document.getElementById('fbUpBtn');
+const fbPath = document.getElementById('fbPath');
+const fbFilter = document.getElementById('fbFilter');
+const fbList = document.getElementById('fbList');
+const fbFooter = document.getElementById('fbFooter');
+
+const ICON_FOLDER = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>';
+const ICON_FILM = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="20" height="20" rx="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="17" x2="22" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/></svg>';
+const ICON_TEXT = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>';
+
+const fbState = {
+  kind: 'video',
+  path: null,
+  parent: null,
+  entries: [],
+  onPick: null,
+  returnFocus: null,
+  requestId: 0
+};
+
+function storageGet(key) {
+  try { return localStorage.getItem(key); } catch (e) { return null; }
+}
+function storageSet(key, value) {
+  try { localStorage.setItem(key, value); } catch (e) { /* ignore */ }
+}
+
+function dirnameOf(p) {
+  const trimmed = (p || '').trim();
+  const idx = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'));
+  if (idx < 0) return null;
+  if (idx === 0) return trimmed[0];
+  return trimmed.slice(0, idx);
+}
+
+function formatSize(bytes) {
+  if (bytes == null) return '';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  let n = bytes;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return `${n >= 10 || i === 0 ? Math.round(n) : n.toFixed(1)} ${units[i]}`;
+}
+
+function openFileBrowser({ kind, startDir, onPick, returnFocus }) {
+  fbState.kind = kind;
+  fbState.onPick = onPick;
+  fbState.returnFocus = returnFocus || null;
+  fbTitle.textContent = kind === 'subtitle' ? 'Choose a subtitle file' : 'Choose a movie';
+  fileBrowser.hidden = false;
+  document.body.style.overflow = 'hidden';
+  loadDirectory(startDir || storageGet(`cinesync_browse_dir_${kind}`) || null, true);
+}
+
+function closeFileBrowser() {
+  fileBrowser.hidden = true;
+  document.body.style.overflow = '';
+  fbState.requestId++;
+  if (fbState.returnFocus) fbState.returnFocus.focus();
+}
+
+async function loadDirectory(dir, fallbackToHome = false) {
+  const requestId = ++fbState.requestId;
+  fbFilter.value = '';
+  fbList.innerHTML = '<div class="fb-empty">Loading…</div>';
+
+  const params = new URLSearchParams({ kind: fbState.kind });
+  if (dir) params.set('dir', dir);
+
+  let data;
+  try {
+    const res = await fetch(`/api/browse?${params}`);
+    data = await res.json();
+    if (requestId !== fbState.requestId) return;
+    if (!res.ok) {
+      if (fallbackToHome && dir && res.status !== 403) return loadDirectory(null, false);
+      throw new Error(data.error || 'Could not open folder');
+    }
+  } catch (err) {
+    if (requestId !== fbState.requestId) return;
+    fbList.innerHTML = `<div class="fb-empty is-error">${escapeHtml(err.message)}</div>`;
+    fbFooter.textContent = 'You can still paste the full path into the field instead.';
+    return;
+  }
+
+  fbState.path = data.path;
+  fbState.parent = data.parent;
+  fbState.entries = data.entries;
+  storageSet(`cinesync_browse_dir_${fbState.kind}`, data.path);
+
+  // The container is RTL so long paths truncate on the left; isolate the text so it still reads LTR.
+  const pathText = document.createElement('bdi');
+  pathText.dir = 'ltr';
+  pathText.textContent = data.path;
+  fbPath.replaceChildren(pathText);
+  fbPath.title = data.path;
+  fbUpBtn.disabled = !data.parent;
+  renderPlaces(data.places);
+  renderEntries();
+  fbFilter.focus();
+}
+
+function renderPlaces(places) {
+  fbPlaces.innerHTML = '';
+  places.forEach(place => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'fb-place' + (place.path === fbState.path ? ' active' : '');
+    btn.textContent = place.label;
+    btn.title = place.path;
+    btn.addEventListener('click', () => loadDirectory(place.path));
+    fbPlaces.appendChild(btn);
+  });
+}
+
+function renderEntries() {
+  const query = fbFilter.value.trim().toLowerCase();
+  const visible = query
+    ? fbState.entries.filter(e => e.name.toLowerCase().includes(query))
+    : fbState.entries;
+
+  fbList.innerHTML = '';
+  if (visible.length === 0) {
+    const what = fbState.kind === 'subtitle' ? 'subtitle files' : 'video files';
+    fbList.innerHTML = `<div class="fb-empty">${query ? 'Nothing matches that filter' : `No folders or ${what} here`}</div>`;
+  }
+
+  visible.forEach(entry => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'fb-item' + (entry.type === 'file' ? ' is-file' : '');
+    item.setAttribute('role', 'option');
+    item.title = entry.path;
+    const icon = entry.type === 'dir' ? ICON_FOLDER : (fbState.kind === 'subtitle' ? ICON_TEXT : ICON_FILM);
+    item.innerHTML = `${icon}<span class="fb-item-name">${escapeHtml(entry.name)}</span>` +
+      (entry.type === 'file' ? `<span class="fb-item-meta">${formatSize(entry.size)}</span>` : '');
+    item.addEventListener('click', () => {
+      if (entry.type === 'dir') {
+        loadDirectory(entry.path);
+      } else {
+        const pick = fbState.onPick;
+        closeFileBrowser();
+        if (pick) pick(entry.path);
+      }
+    });
+    fbList.appendChild(item);
+  });
+
+  const files = fbState.entries.filter(e => e.type === 'file').length;
+  const dirs = fbState.entries.length - files;
+  fbFooter.textContent = `${dirs} folder${dirs === 1 ? '' : 's'} · ${files} ${fbState.kind === 'subtitle' ? 'subtitle' : 'video'} file${files === 1 ? '' : 's'}`;
+}
+
+fbFilter.addEventListener('input', renderEntries);
+fbCloseBtn.addEventListener('click', closeFileBrowser);
+fbUpBtn.addEventListener('click', () => { if (fbState.parent) loadDirectory(fbState.parent); });
+fileBrowser.addEventListener('mousedown', (e) => { if (e.target === fileBrowser) closeFileBrowser(); });
+
+fileBrowser.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeFileBrowser();
+    return;
+  }
+
+  const items = Array.from(fbList.querySelectorAll('.fb-item'));
+  const index = items.indexOf(document.activeElement);
+
+  if (e.key === 'Backspace' && (document.activeElement !== fbFilter || fbFilter.value === '')) {
+    e.preventDefault();
+    if (fbState.parent) loadDirectory(fbState.parent);
+  } else if (e.key === 'ArrowDown' && items.length) {
+    e.preventDefault();
+    items[Math.min(index + 1, items.length - 1)].focus();
+  } else if (e.key === 'ArrowUp' && items.length) {
+    e.preventDefault();
+    if (index <= 0) fbFilter.focus();
+    else items[index - 1].focus();
+  } else if (e.key === 'Enter' && document.activeElement === fbFilter && items.length) {
+    e.preventDefault();
+    items[0].click();
+  }
+});
+
+document.getElementById('browseMovieBtn').addEventListener('click', (e) => {
+  openFileBrowser({
+    kind: 'video',
+    startDir: dirnameOf(filepathInput.value),
+    returnFocus: e.currentTarget,
+    onPick: (filePath) => {
+      filepathInput.value = filePath;
+      inspectError.style.display = 'none';
+      inspectBtn.click();
+    }
+  });
+});
+
+document.getElementById('browseSubBtn').addEventListener('click', (e) => {
+  openFileBrowser({
+    kind: 'subtitle',
+    startDir: dirnameOf(externalSubInput.value) || dirnameOf(filepathInput.value),
+    returnFocus: e.currentTarget,
+    onPick: (filePath) => {
+      externalSubInput.value = filePath;
+      externalSubInput.dispatchEvent(new Event('input'));
+    }
+  });
+});
+
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, (m) => ({
     '&': '&amp;',

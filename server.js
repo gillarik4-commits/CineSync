@@ -4,6 +4,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const mediaManager = require('./server/mediaManager');
 const syncManager = require('./server/syncManager');
+const fileBrowser = require('./server/fileBrowser');
 
 const app = express();
 const server = http.createServer(app);
@@ -42,6 +43,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // Attach media routes
 app.use('/', mediaManager.router);
+app.use('/', fileBrowser.router);
 
 // Reset party endpoint
 app.post('/api/reset-party', (req, res) => {
