@@ -1,7 +1,31 @@
 {
   "name": "cinesync",
-  "version": "1.0.0",
-  "description": "Zero-buffering local video watch party application",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Self-hosted watch parties for the movies on your computer: stream in seconds, watch in sync, chat and react.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gillarik4-commits/cinesync.git"
+  },
+  "homepage": "https://github.com/gillarik4-commits/cinesync#readme",
+  "bugs": {
+    "url": "https://github.com/gillarik4-commits/cinesync/issues"
+  },
+  "keywords": [
+    "watch-party",
+    "self-hosted",
+    "streaming",
+    "hls",
+    "ffmpeg",
+    "websocket",
+    "react",
+    "vite",
+    "cloudflare-tunnel"
+  ],
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
   "main": "server.js",
   "scripts": {
     "start": "vite build --logLevel warn && node server.js",

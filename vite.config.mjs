@@ -26,6 +26,8 @@ export default defineConfig({
   build: {
     outDir: fileURLToPath(new URL('./dist', import.meta.url)),
     emptyOutDir: true,
+    // hls.js (~580 kB) is loaded on demand only when a movie plays.
+    chunkSizeWarningLimit: 700,
     rolldownOptions: {
       input: {
         setup: client('setup.html'),
